@@ -9,7 +9,7 @@
 #
 # 사용법:
 #   ./setup-branch-protection.sh <github-username> <repo-name>
-#   ./setup-branch-protection.sh ysoh1113 portfolio
+#   ./setup-branch-protection.sh Yongseok1113 portfolio
 # =============================================================================
 set -euo pipefail
 
@@ -93,6 +93,7 @@ echo ""
 
 protect_branch "main"
 protect_branch "develop/adp-ma"
+protect_branch "develop/aquarium"
 
 echo ""
 log_ok "완료"

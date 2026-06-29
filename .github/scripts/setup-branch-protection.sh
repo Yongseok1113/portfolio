@@ -43,17 +43,18 @@ fi
 log_info "레포: ${OWNER}/${REPO}"
 
 # ── 보호 규칙 payload ─────────────────────────────────────────────────────────
-# 개인 레포 설정:
-#   - PR 필수 (직접 push 차단)
-#   - 승인 카운트 0 (혼자 머지 가능)
+# 실무 협업 기준:
+#   - PR 필수 (직접 push 차단 — 관리자 포함)
+#   - 승인 카운트 0 (개인 레포, 혼자 머지 가능)
 #   - force push 금지
 #   - 브랜치 삭제 금지
+#   - enforce_admins true → owner도 규칙 적용
 PROTECTION_PAYLOAD='{
   "required_pull_request_reviews": {
     "required_approving_review_count": 0,
     "dismiss_stale_reviews": false
   },
-  "enforce_admins": false,
+  "enforce_admins": true,
   "restrictions": null,
   "required_status_checks": null,
   "allow_force_pushes": false,
@@ -85,10 +86,11 @@ protect_branch() {
 # ── 메인 ─────────────────────────────────────────────────────────────────────
 echo ""
 echo "브랜치 보호 규칙:"
-echo "  - PR 필수 (직접 push 차단)"
+echo "  - PR 필수 (직접 push 차단 — 관리자 포함)"
 echo "  - 승인 카운트: 0 (개인 레포)"
 echo "  - force push: 금지"
 echo "  - 브랜치 삭제: 금지"
+echo "  - enforce_admins: true (owner도 규칙 적용)"
 echo ""
 
 protect_branch "main"

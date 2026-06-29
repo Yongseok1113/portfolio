@@ -1,0 +1,25 @@
+# 공유 인프라 엔드포인트 ConfigMap
+# ⚠️  민감값(패스워드·키)은 이 파일에 기재하지 않음
+#     패스워드가 필요한 앱은 각 프로젝트 Secret에서 직접 참조할 것
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: infra-endpoints
+  namespace: portfolio-infra
+  labels:
+    managed-by: portfolio-root
+data:
+  # Redis
+  VALKEY_URL: "redis://portfolio-valkey.portfolio-infra.svc.cluster.local:6379"
+
+  # PostgreSQL
+  POSTGRES_HOST: "portfolio-postgres-primary.portfolio-infra.svc.cluster.local"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "portfolio"
+  POSTGRES_USER: "portfolio"
+
+  # MinIO (엔드포인트만 — 키는 각 프로젝트 Secret에서)
+  MINIO_ENDPOINT: "http://minio.portfolio-infra.svc.cluster.local:9000"
+
+  # Ollama
+  OLLAMA_BASE_URL: "http://ollama.portfolio-infra.svc.cluster.local:11434"

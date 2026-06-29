@@ -1,2 +1,7 @@
-*/.venv
-datasets
+**/.venv
+.k8s/**/secret.yaml
+.k8s/.env
+.k8s/**/.env
+.env
+.env.*
+!.env.example

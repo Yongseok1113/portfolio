@@ -6,7 +6,15 @@
 디렉토리 구조
 
 ```
-portfolio/                  
+portfolio/      
+├── .github/                                ← 레포 설정 스크립트
+│   ├── scripts/
+│       └── setup-branch-protection.sh
+├── workflows/                              ← GitHub Actions 
+│   └── ci.yaml
+└── PULL_REQUEST_TEMPLATE.md
+├── docs/
+│   └── GIT_CONVENTION.md
 ├── .k8s/                      
 │   ├── scripts/
 │   │   ├── cluster-up.sh

@@ -16,8 +16,8 @@ from pydantic import BaseModel
 import re
 
 from adp_ma.config import Settings
-from adp_ma.contracts import RowCountRelation, sanitize_contract, verify_contract
-from adp_ma.ground import run_ladder
+from adp_ma.contracts import sanitize_contract, verify_contract
+from adp_ma.ground import run_agent_code, run_ladder
 from adp_ma.llm import LLMClient
 from adp_ma.meta_agents import (
     Architect,
@@ -60,9 +60,21 @@ class PipelineRunner:
         self.orchestrator = Orchestrator(self.llm)
         self.architect = Architect(self.llm)
         self.monitor = Monitor()
+        self._execute = run_agent_code  # run 시작 시 executor 설정에 따라 교체
+
+    def _make_executor(self, run_id: str):
+        if self.settings.executor == "k8s":
+            from adp_ma.ground.k8s_executor import K8sJobExecutor
+            from adp_ma.state.storage import ArtifactStore
+
+            store = ArtifactStore.from_settings(self.settings)
+            return K8sJobExecutor(self.settings, store, run_id)
+        return run_agent_code
 
     def run(self, input_path: str | Path, goal: str, output_path: str | Path | None = None) -> PipelineResult:
         case = CaseFolder(self.settings.runs_dir)
+        self._execute = self._make_executor(case.run_id)
+        case.record("executor", {"mode": self.settings.executor})
         df = _read_table(Path(input_path))
 
         # Stage 1 — Data Understanding
@@ -159,6 +171,7 @@ class PipelineRunner:
                 refine=self.architect.refine_code,
                 max_refine_per_level=self.settings.max_refine_attempts,
                 verify=lambda d_in, d_out, _c=spec.contract: verify_contract(_c, d_in, d_out),
+                execute=self._execute,
             )
             case.save_agent_code(spec.name, spec.code)
             if not ladder.ok:

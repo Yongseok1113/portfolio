@@ -44,7 +44,7 @@ LLM 백엔드는 루트 공유 인프라의 결정(Groq API, OpenAI 호환)을 �
 | 규칙 기반 Monitor (논문 임계값 표) | ✅ | `src/adp_ma/meta_agents/monitor.py` |
 | Case folder 감사 추적 | ✅ | `src/adp_ma/state/case_folder.py` |
 | 에이전트 라이브러리 재사용 | ✅ (인메모리) | `src/adp_ma/meta_agents/architect.py` |
-| 샌드박스 | 네임스페이스 격리 (프로세스 격리는 K8s Job 로드맵) | `src/adp_ma/ground/sandbox.py` |
+| 샌드박스 | 네임스페이스 격리 + **K8s Job 프로세스 격리** (`EXECUTOR=k8s`) | `src/adp_ma/ground/sandbox.py`, `k8s_executor.py` |
 | 병렬 dispatch (autonomous/hybrid) | ⬜ centralized만 | 로드맵 |
 | 다중 소스 join, 비용 추적, HITL 체크포인트 | ⬜ | 로드맵 |
 
@@ -64,31 +64,28 @@ uv run adp-ma run -i examples/sales_raw.csv \
 uv run pytest          # LLM 없이 도는 결정적 테스트 (contracts/monitor/sampling/sandbox)
 ```
 
-## K8s 통합 (로드맵)
+## K8s Job 실행 (프로세스 격리)
 
-- 루트 `infra-endpoints` ConfigMap의 `GROQ_BASE_URL`/`GROQ_MODEL`, `groq-secret`의 `GROQ_API_KEY`를 그대로 env로 주입 — 코드 수정 불필요
-- ground agent 실행을 `adp-ma-workers` 네임스페이스의 K8s Job으로 분리 → 논문의 프로세스 격리 확보
-- case folder를 MinIO로, 실행 큐를 Valkey로 이전
-- 이후 **AutoKaggle** 논문 구조(reader/planner/developer/reviewer 협업 + 단계별 검증)로 확장 — 메타-에이전트 계층과 progressive validation이 그대로 재사용됨
-
-## 품질 벤치마크
-
-`examples/benchmark.py` — 고정 데이터·목표에 대해 산출물을 **결정적 정답**(pandas 직접 계산)과 비교 채점한다.
-지표: schema_ok(퍼지)/schema_exact(지시 준수)/sum_rel_err(합계 오차)/group_ratio(그룹 커버리지).
+ground agent 1회 실행 = `adp-ma-workers` 네임스페이스의 Job 1개.
+controller ↔ worker 데이터 교환은 MinIO(`adp-ma` 버킷, parquet)로 한다.
 
 ```bash
-uv run python examples/benchmark.py --model llama-3.3-70b-versatile --runs 3
+# 1회 준비: minio-secret 복제 + RBAC + worker 이미지 빌드 (minikube 내부)
+bash .k8s/scripts/setup.sh
+
+# 클러스터 밖(로컬 CLI)에서 디스패치할 때
+kubectl port-forward svc/minio 9000:9000 -n portfolio-infra &
+EXECUTOR=k8s MINIO_ENDPOINT=http://127.0.0.1:9000 \
+  uv run adp-ma run -i examples/sales_raw.csv -g "..."
+# (MINIO_ROOT_USER/PASSWORD·GROQ_API_KEY는 .env로 — 루트 .k8s/.env와 동일 키)
 ```
 
-2026-07-13 측정 (동일 목표: 중복 제거→정규화→표준화→월별·지역별 집계):
+- Job은 `backoffLimit: 0` — 코드 오류 재시도는 refine 루프가 담당하고, Job 레벨 실패는 인프라 오류로 구분
+- worker 파드는 실행 성패를 `status.json`으로 전달하고 항상 정상 종료
+- 코드 변경 시 이미지 재빌드 필요: `minikube -p portfolio image build -t adp-ma:0.1.0 adp-ma/`
 
-| 모델 | 완주 | 합계 오차 | 그룹 | 소요 | 판정 |
-|---|---|---|---|---|---|
-| llama-3.3-70b-versatile | ✅ 21 calls | **0.0%** | 18/18 | 60s | **pass** |
-| llama-3.1-8b-instant | ❌ plan 재시도 소진 | — | — | 600s | fail |
+## 로드맵
 
-- 8b는 스키마 계약 위반(dedup 중 필수 컬럼 유실)을 refine으로 복구하지 못함 —
-  프레임워크가 오염된 출력을 정확히 **거부**한 사례 (감사 추적에 전 과정 기록)
-- 개발·데모에는 `GROQ_MODEL=llama-3.3-70b-versatile` 권장
-- 프롬프트 규칙: 정제 단계는 행 보존(coerce), 집계 단계는 `.agg`(not `.transform`) —
-  집계·중복제거처럼 행 감소가 계약된 단계는 Monitor의 행 소실 룰을 WARN으로 완화
+- case folder MinIO 이전, 실행 큐 Valkey, in-cluster controller 배포(RBAC은 준비됨)
+- 병렬 dispatch (autonomous/hybrid), HITL 체크포인트, 비용 추적
+- **AutoKaggle** 논문 구조(reader/planner/developer/reviewer 협업 + 단계별 검증)로 확장 — 메타-에이전트 계층과 progressive validation이 그대로 재사용됨

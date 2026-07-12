@@ -1,0 +1,50 @@
+# 참고용 템플릿 — 실제 Job은 K8sJobExecutor(src/adp_ma/ground/k8s_executor.py)가
+# 이 구조 그대로 프로그래매틱하게 생성한다. 값 변경 시 양쪽을 함께 수정할 것.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: adp-ma-<run-id>-<seq>
+  namespace: adp-ma-workers
+  labels:
+    app: adp-ma
+    role: ground-agent
+    run-id: <run-id>
+spec:
+  backoffLimit: 0                  # 코드 오류 재시도는 refine 루프 담당
+  ttlSecondsAfterFinished: 600
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: adp-ma
+        role: ground-agent
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: worker
+          image: adp-ma:0.1.0
+          imagePullPolicy: IfNotPresent
+          args: ["worker", "--prefix", "<run-id>/<seq>"]
+          env:
+            - name: MINIO_ENDPOINT
+              value: "http://minio.portfolio-infra.svc.cluster.local:9000"
+            - name: MINIO_BUCKET
+              value: "adp-ma"
+            # minio-secret 키가 케밥케이스라 envFrom 주입 불가 — 명시 매핑
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret
+                  key: root-user
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret
+                  key: root-password
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi

@@ -11,7 +11,7 @@ import pandas as pd
 
 from adp_ma.contracts import ContractVerificationResult
 from adp_ma.ground.base import GroundAgentSpec
-from adp_ma.ground.sandbox import run_agent_code
+from adp_ma.ground.sandbox import SandboxResult, run_agent_code
 
 SAMPLE_LADDER: list[tuple[str, int | None]] = [
     ("XS", 10),
@@ -22,6 +22,8 @@ SAMPLE_LADDER: list[tuple[str, int | None]] = [
 
 RefineFn = Callable[[GroundAgentSpec, str], str]
 VerifyFn = Callable[[pd.DataFrame, pd.DataFrame], ContractVerificationResult | None]
+# run_agent_code와 동일 시그니처 — K8sJobExecutor 등으로 대체 가능
+ExecuteFn = Callable[[str, pd.DataFrame], "SandboxResult"]
 
 
 @dataclass
@@ -42,6 +44,7 @@ def run_ladder(
     *,
     max_refine_per_level: int = 3,
     verify: VerifyFn | None = None,
+    execute: ExecuteFn = run_agent_code,
 ) -> LadderResult:
     revisions = 0
     for level, n in SAMPLE_LADDER:
@@ -53,7 +56,7 @@ def run_ladder(
 
         attempts = 0
         while True:
-            res = run_agent_code(spec.code, sample)
+            res = execute(spec.code, sample)
             contract_error = ""
             if res.ok and verify is not None:
                 cvr = verify(sample, res.df)

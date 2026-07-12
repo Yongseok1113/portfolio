@@ -44,6 +44,24 @@ def run(
 
 
 @app.command()
+def worker(
+    prefix: str = typer.Option(..., "--prefix", help="아티팩트 스토어 키 프리픽스 (<run-id>/<seq>)"),
+):
+    """[K8s Job 내부용] 스토어에서 코드·데이터를 받아 ground agent 1개를 실행한다.
+
+    실행 성패는 status.json으로 전달하므로 항상 0으로 종료한다
+    (비정상 종료 = 인프라 오류로 해석됨).
+    """
+    from adp_ma.ground.worker import execute_from_store
+    from adp_ma.state.storage import ArtifactStore
+
+    settings = Settings()
+    store = ArtifactStore.from_settings(settings)
+    status = execute_from_store(store, prefix)
+    console.print(f"worker done: ok={status['ok']} prefix={prefix}")
+
+
+@app.command()
 def profile(
     input: Path = typer.Option(..., "--input", "-i", exists=True, help="입력 데이터"),
 ):

@@ -1,0 +1,156 @@
+"""Architect 메타-에이전트 (논문 Stage 4 + 코드 생성).
+
+phase를 ground agent 명세(유형·목표·스키마 계약)로 구체화하고,
+각 명세에 대해 pandas 코드를 생성·수정한다. 검증된 정의는
+라이브러리에 보관해 재사용한다.
+"""
+
+import hashlib
+import re
+
+from adp_ma.contracts import SchemaContract
+from adp_ma.ground import AGENT_TYPES, GroundAgentSpec
+from adp_ma.llm import LLMClient, extract_code
+from adp_ma.meta_agents.orchestrator import Phase
+
+_EXPAND_SYSTEM = f"""\
+You are the Architect of an autonomous data processing system.
+Convert one pipeline phase into 1-3 concrete ground agents executed in order.
+Agent types: {", ".join(AGENT_TYPES)}.
+Each agent transforms a single pandas DataFrame (df in, df out).
+Also declare a schema contract per agent. Return JSON:
+{{"agents": [{{
+  "name": str (short snake_case),
+  "agent_type": str,
+  "objective": str (precise instruction for a code generator),
+  "contract": {{
+     "required_input_columns": {{"col": "int|float|str|bool|datetime|any"}},
+     "add_columns": {{"col": "dtype"}},
+     "preserve_columns": [str],
+     "remove_columns": [str],
+     "row_count": "equal|less_or_equal|greater_or_equal|any"
+  }}
+}}]}}
+Every agent object MUST include "name", "agent_type" and "objective".
+Example agent: {{"name": "drop_duplicates", "agent_type": "transformer",
+"objective": "Remove duplicate rows based on order_id, keep first occurrence",
+"contract": {{"required_input_columns": {{"order_id": "str"}},
+"preserve_columns": ["order_id"], "row_count": "less_or_equal"}}}}
+Keep contracts minimal — only what the objective guarantees."""
+
+_CODEGEN_SYSTEM = """\
+You write production pandas code for one step of a data pipeline.
+Rules:
+- Define exactly one function: def run(df: pd.DataFrame) -> pd.DataFrame
+- pandas is available as pd, numpy as np. Allowed imports: math, re, datetime, json, statistics, collections, itertools, functools.
+- No file I/O, no network, no exec/eval, no global state.
+- Never mutate columns you were not asked to touch.
+- Handle nulls and unexpected values defensively.
+Return ONLY the code in one ```python block."""
+
+_REFINE_SYSTEM = _CODEGEN_SYSTEM + """
+
+The previous implementation failed. Fix the root cause of the error.
+Do not repeat the same approach if the error indicates it cannot work."""
+
+
+class Architect:
+    def __init__(self, llm: LLMClient):
+        self.llm = llm
+        # 검증된 에이전트 정의 라이브러리 — (type, objective) 해시 → spec
+        self.library: dict[str, GroundAgentSpec] = {}
+
+    # ── Stage 4: Phase Expansion ────────────────────────────────────────────
+    def expand(self, phase: Phase, profile_text: str, hints: str = "") -> list[GroundAgentSpec]:
+        user = (
+            f"## Phase\nname: {phase.name}\nobjective: {phase.objective}\n"
+            f"rationale: {phase.rationale}\n\n## Data profile\n{profile_text}"
+        )
+        if hints:
+            user += f"\n\n## Hints from previous failure\n{hints}"
+        try:
+            data = self.llm.chat_json(_EXPAND_SYSTEM, user)
+            specs = _parse_specs(data)
+        except ValueError:
+            # 약한 모델이 명세 스키마를 못 지키면 phase 목표를 그대로
+            # 단일 transformer로 강등해 진행을 보장한다 (계약 없음)
+            specs = [
+                GroundAgentSpec(
+                    name=_slug(phase.name), agent_type="transformer", objective=phase.objective
+                )
+            ]
+        for spec in specs:
+            spec.hints = hints
+        return specs
+
+    # ── 코드 생성 / 수정 ─────────────────────────────────────────────────────
+    def generate_code(self, spec: GroundAgentSpec, profile_text: str) -> str:
+        cached = self.library.get(_library_key(spec))
+        if cached is not None:
+            return cached.code
+        user = (
+            f"## Agent\ntype: {spec.agent_type}\nobjective: {spec.objective}\n"
+            f"## Schema contract\n{spec.contract.model_dump_json()}\n"
+            f"## Data profile\n{profile_text}"
+        )
+        if spec.hints:
+            user += f"\n## Hints\n{spec.hints}"
+        return extract_code(self.llm.chat(_CODEGEN_SYSTEM, user))
+
+    def refine_code(self, spec: GroundAgentSpec, error: str) -> str:
+        user = (
+            f"## Agent objective\n{spec.objective}\n"
+            f"## Schema contract\n{spec.contract.model_dump_json()}\n"
+            f"## Current code\n```python\n{spec.code}\n```\n"
+            f"## Error\n{error}"
+        )
+        return extract_code(self.llm.chat(_REFINE_SYSTEM, user))
+
+    # ── 라이브러리 ───────────────────────────────────────────────────────────
+    def register_validated(self, spec: GroundAgentSpec):
+        """FULL 실행까지 통과한 에이전트를 재사용 라이브러리에 등록."""
+        self.library[_library_key(spec)] = spec.model_copy(deep=True)
+
+
+def _slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "agent"
+
+
+def _library_key(spec: GroundAgentSpec) -> str:
+    raw = f"{spec.agent_type}:{spec.objective}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _parse_specs(data) -> list[GroundAgentSpec]:
+    if isinstance(data, dict):
+        if "agents" in data:
+            data = data["agents"]
+        else:
+            data = [data]  # 단일 에이전트를 감싸지 않고 반환한 경우
+    specs = []
+    for i, item in enumerate(data):
+        if not isinstance(item, dict):
+            continue
+        # 약한 모델이 objective 대신 다른 키를 쓰는 경우 흡수
+        objective = item.get("objective") or item.get("description") or item.get("task")
+        if not objective:
+            continue
+        item = {**item, "objective": objective}
+        agent_type = str(item.get("agent_type", "transformer"))
+        if agent_type not in AGENT_TYPES:
+            agent_type = "transformer"
+        try:
+            contract = SchemaContract.model_validate(item.get("contract") or {})
+        except Exception:
+            contract = SchemaContract()  # 계약 파싱 실패는 무계약으로 진행
+        specs.append(
+            GroundAgentSpec(
+                name=str(item.get("name") or f"agent_{i}"),
+                agent_type=agent_type,
+                objective=str(item["objective"]),
+                contract=contract,
+            )
+        )
+    if not specs:
+        raise ValueError(f"ground agent 파싱 실패: {data!r}")
+    return specs

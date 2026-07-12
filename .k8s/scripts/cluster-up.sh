@@ -4,7 +4,8 @@
 #
 # 역할:
 #   1) Minikube 클러스터 기동
-#   2) 공유 인프라 배포 (portfolio-infra ns: Redis / MinIO / Ollama)
+#   2) 공유 인프라 배포 (portfolio-infra ns: Valkey / PostgreSQL / MinIO)
+#      LLM은 Groq API(외부) 사용 — K8s 내 배포 없음
 #   3) [선택] 특정 프로젝트 앱 배포  → 프로젝트/.k8s/ 내 manifest 읽음
 #
 # 사용법:
@@ -144,7 +145,11 @@ apply_namespaces() {
   log_section "네임스페이스"
   local ns_dir="$K8S_ROOT/namespaces"
   if [[ -d "$ns_dir" ]] && compgen -G "$ns_dir/*.yaml" > /dev/null 2>&1; then
-    kubectl apply -f "$ns_dir/"
+    # _template.yaml은 참고용 파일 — 배포 대상 제외
+    for f in "$ns_dir"/*.yaml; do
+      [[ "$(basename "$f")" == _* ]] && continue
+      kubectl apply -f "$f"
+    done
   else
     # 최소 기본 생성
     for ns in portfolio-infra; do
@@ -171,6 +176,7 @@ deploy_infra() {
   local missing_secrets=()
   kubectl get secret postgres-secret -n portfolio-infra &>/dev/null || missing_secrets+=("postgres-secret")
   kubectl get secret minio-secret    -n portfolio-infra &>/dev/null || missing_secrets+=("minio-secret")
+  kubectl get secret groq-secret     -n portfolio-infra &>/dev/null || missing_secrets+=("groq-secret")
 
   if [[ ${#missing_secrets[@]} -gt 0 ]]; then
     log_warn "Secret 없음 (${missing_secrets[*]}) — create-secrets.sh 자동 실행"
@@ -197,7 +203,7 @@ deploy_infra() {
       exit 1
     }
   else
-    log_info "Secret 확인 완료 (postgres-secret, minio-secret)"
+    log_info "Secret 확인 완료 (postgres-secret, minio-secret, groq-secret)"
   fi
 
   # Valkey (Redis 대체 — Linux Foundation 공식 오픈소스)
@@ -246,16 +252,6 @@ deploy_infra() {
     log_ok "MinIO 완료"
   else
     log_warn "infra/minio/*.yaml 없음 — MinIO 생략"
-  fi
-
-  # Ollama (GPU)
-  log_info "Ollama..."
-  local ollama_dir="$K8S_ROOT/infra/ollama"
-  if compgen -G "$ollama_dir/*.yaml" > /dev/null 2>&1; then
-    kubectl apply -f "$ollama_dir/"
-    log_ok "Ollama 완료"
-  else
-    log_warn "infra/ollama/*.yaml 없음 — Ollama 생략"
   fi
 
   # 공유 ConfigMap
@@ -401,7 +397,7 @@ print_summary() {
   echo -e "  Valkey       : kubectl port-forward svc/portfolio-valkey 6379:6379 -n portfolio-infra"
   echo -e "  PostgreSQL   : kubectl port-forward svc/portfolio-postgres-primary 5432:5432 -n portfolio-infra"
   echo -e "  MinIO 콘솔   : kubectl port-forward svc/minio 9001:9001 -n portfolio-infra"
-  echo -e "  Ollama       : kubectl port-forward svc/ollama 11434:11434 -n portfolio-infra"
+  echo -e "  Groq (LLM)   : 외부 API — https://api.groq.com (groq-secret 참조)"
   if [[ -n "$PROJECT" ]]; then
     echo -e "  Web UI       : kubectl port-forward svc/${PROJECT}-webui 8080:80 -n ${PROJECT}-system"
   fi

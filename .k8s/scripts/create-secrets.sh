@@ -18,7 +18,6 @@ log_error() { echo -e "${RED}[ERR ]${NC}  $*" >&2; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 
 # ── .env 자동 탐색 및 로드 ────────────────────────────────────────────────────
-# 스크립트 위치 기준으로 .k8s/.env 탐색
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 K8S_ROOT="$(dirname "$SCRIPT_DIR")"
 ENV_FILE="$K8S_ROOT/.env"
@@ -32,7 +31,7 @@ fi
 
 # ── 환경변수 확인 ─────────────────────────────────────────────────────────────
 missing=()
-for var in POSTGRES_PASSWORD POSTGRES_APP_PASSWORD MINIO_ROOT_USER MINIO_ROOT_PASSWORD; do
+for var in POSTGRES_PASSWORD POSTGRES_APP_PASSWORD MINIO_ROOT_USER MINIO_ROOT_PASSWORD GROQ_API_KEY; do
   [[ -z "${!var:-}" ]] && missing+=("$var")
 done
 
@@ -72,6 +71,14 @@ kubectl create secret generic minio-secret \
   --from-literal=root-password="$MINIO_ROOT_PASSWORD" \
   --dry-run=client -o yaml | kubectl apply -f -
 log_ok "minio-secret 완료"
+
+# ── Groq Secret ───────────────────────────────────────────────────────────────
+log_info "groq-secret 생성 중..."
+kubectl create secret generic groq-secret \
+  --namespace portfolio-infra \
+  --from-literal=api-key="$GROQ_API_KEY" \
+  --dry-run=client -o yaml | kubectl apply -f -
+log_ok "groq-secret 완료"
 
 # ── 완료 ─────────────────────────────────────────────────────────────────────
 echo ""

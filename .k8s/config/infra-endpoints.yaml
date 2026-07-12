@@ -1,6 +1,6 @@
 # 공유 인프라 엔드포인트 ConfigMap
 # ⚠️  민감값(패스워드·키)은 이 파일에 기재하지 않음
-#     패스워드가 필요한 앱은 각 프로젝트 Secret에서 직접 참조할 것
+#     패스워드·API키가 필요한 앱은 각 프로젝트가 Secret에서 직접 참조할 것
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -9,7 +9,7 @@ metadata:
   labels:
     managed-by: portfolio-root
 data:
-  # Redis
+  # Valkey (Redis 호환)
   VALKEY_URL: "redis://portfolio-valkey.portfolio-infra.svc.cluster.local:6379"
 
   # PostgreSQL
@@ -21,5 +21,7 @@ data:
   # MinIO (엔드포인트만 — 키는 각 프로젝트 Secret에서)
   MINIO_ENDPOINT: "http://minio.portfolio-infra.svc.cluster.local:9000"
 
-  # Ollama
-  OLLAMA_BASE_URL: "http://ollama.portfolio-infra.svc.cluster.local:11434"
+  # LLM — Groq API (외부, OpenAI 호환)
+  # API 키는 groq-secret에서 참조 (이 ConfigMap에는 URL만)
+  GROQ_BASE_URL: "https://api.groq.com/openai/v1"
+  GROQ_MODEL: "llama-3.1-8b-instant"

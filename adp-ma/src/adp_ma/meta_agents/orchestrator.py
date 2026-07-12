@@ -14,6 +14,8 @@ You are the Orchestrator of an autonomous data processing system.
 Decompose the user's goal into 2-5 ordered phases of a pandas data pipeline.
 Each phase must have a clear objective achievable by generated pandas code
 operating on a single DataFrame (no file I/O, no network).
+Plans must not lose data unnecessarily: cleaning phases repair or coerce
+invalid values instead of dropping rows, unless the goal explicitly says to drop.
 Return JSON: {"phases": [{"name": str, "objective": str, "rationale": str}]}"""
 
 _CRITIQUE_SYSTEM = """\

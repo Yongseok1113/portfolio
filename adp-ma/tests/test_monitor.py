@@ -22,6 +22,13 @@ def test_row_drop_critical_triggers_retry():
     assert report.verdict == Verdict.RETRY
 
 
+def test_expected_reduction_downgrades_to_warn():
+    # 집계처럼 행 감소가 계약된 단계는 RETRY 대신 WARN (기록은 남긴다)
+    report = Monitor().review(metrics(rows_out=18), expect_row_reduction=True)
+    assert report.verdict == Verdict.WARN
+    assert any("계약된 축소" in f for f in report.findings)
+
+
 def test_row_drop_warn_only_warns():
     report = Monitor().review(metrics(rows_out=600))  # 40% 감소
     assert report.verdict == Verdict.WARN

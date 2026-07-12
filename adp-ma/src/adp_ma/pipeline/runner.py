@@ -13,6 +13,8 @@ from pathlib import Path
 import pandas as pd
 from pydantic import BaseModel
 
+import re
+
 from adp_ma.config import Settings
 from adp_ma.contracts import sanitize_contract, verify_contract
 from adp_ma.ground import run_agent_code, run_ladder
@@ -31,6 +33,13 @@ from adp_ma.state import CaseFolder
 
 class PipelineAbort(Exception):
     """Monitor가 abort 판정을 내렸을 때 실행 전체를 중단한다."""
+
+
+# 행 감소가 목적 자체인 작업의 신호 — Monitor의 행 소실 룰 완화에 사용
+_AGGREGATION_RE = re.compile(
+    r"aggregat|group\s*by|groupby|summar|pivot|dedup|duplicate|집계|합계|요약|중복",
+    re.IGNORECASE,
+)
 
 
 class PipelineResult(BaseModel):
@@ -177,7 +186,12 @@ class PipelineRunner:
                 revisions=ladder.revisions,
                 peak_mem_mb=ladder.peak_mem_mb,
             )
-            report = self.monitor.review(metrics)
+            # 집계·중복제거처럼 행 감소가 의도된 단계는 행 소실 룰을 완화
+            expect_reduction = (
+                spec.contract.row_count == RowCountRelation.LESS_OR_EQUAL
+                or bool(_AGGREGATION_RE.search(spec.objective))
+            )
+            report = self.monitor.review(metrics, expect_row_reduction=expect_reduction)
             case.record(
                 "monitor",
                 {"agent": spec.name, "verdict": report.verdict.value, "findings": report.findings},

@@ -56,6 +56,8 @@ class Monitor:
         self,
         metrics: StepMetrics,
         contract_result: ContractVerificationResult | None = None,
+        *,
+        expect_row_reduction: bool = False,
     ) -> MonitorReport:
         findings: list[str] = []
         verdict = Verdict.CONTINUE
@@ -70,9 +72,12 @@ class Monitor:
         if metrics.rows_in > 0:
             drop = 1.0 - metrics.rows_out / metrics.rows_in
             growth = metrics.rows_out / metrics.rows_in - 1.0
-            if drop >= t.row_drop_critical:
+            if drop >= t.row_drop_critical and not expect_row_reduction:
                 # 무언의 데이터 소실 의심 → 해당 단계 재시도
                 escalate(Verdict.RETRY, f"행 {drop:.0%} 소실 ({metrics.rows_in}→{metrics.rows_out})")
+            elif drop >= t.row_drop_critical and expect_row_reduction:
+                # 집계·중복제거처럼 행 감소가 계약된 단계 — 기록만 남긴다
+                escalate(Verdict.WARN, f"행 {drop:.0%} 감소 (계약된 축소, {metrics.rows_in}→{metrics.rows_out})")
             elif drop >= t.row_drop_warn:
                 escalate(Verdict.WARN, f"행 {drop:.0%} 감소 ({metrics.rows_in}→{metrics.rows_out})")
             if growth >= t.row_growth_warn:

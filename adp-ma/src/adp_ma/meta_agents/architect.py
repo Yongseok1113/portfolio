@@ -46,6 +46,13 @@ Rules:
 - No file I/O, no network, no exec/eval, no global state.
 - Never mutate columns you were not asked to touch.
 - Handle nulls and unexpected values defensively.
+Data preservation (critical, applies to cleaning/parsing steps):
+- PRESERVE ROWS while cleaning. Drop rows ONLY when the objective explicitly requires it (e.g. deduplication).
+- When parsing, use coercion (pd.to_numeric(..., errors="coerce"), pd.to_datetime(..., errors="coerce")) and KEEP unparseable rows as NaN — never filter them out.
+- When standardizing categories, map variants (case, spelling) to canonical values; leave unmatched values as-is or NaN instead of removing rows.
+- EXCEPTION — aggregation: if the objective asks for a grouped summary (groupby/sum/집계),
+  return the AGGREGATED table itself (one row per group via .agg/.sum, NOT .transform);
+  reducing rows this way is required, not data loss.
 Return ONLY the code in one ```python block."""
 
 _REFINE_SYSTEM = _CODEGEN_SYSTEM + """

@@ -1,0 +1,17 @@
+# 새 프로젝트 추가 시 복사 후 <project-name> 치환
+# cp _template.yaml <project-name>.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: <project-name>-system
+  labels:
+    managed-by: portfolio-root
+    project: <project-name>
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: <project-name>-workers
+  labels:
+    managed-by: portfolio-root
+    project: <project-name>

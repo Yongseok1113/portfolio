@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: adp-ma-system
+  labels:
+    managed-by: portfolio-root
+    project: adp-ma
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: adp-ma-workers
+  labels:
+    managed-by: portfolio-root
+    project: adp-ma

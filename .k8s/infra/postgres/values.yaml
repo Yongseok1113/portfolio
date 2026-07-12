@@ -1,0 +1,36 @@
+# PostgreSQL 16 — groundhog2k/postgres chart
+# Image: postgres:16.6 (Docker Hub 공식, 2025-06-29 기준 stable)
+
+image:
+  repository: postgres
+  tag: "16.6"
+  pullPolicy: IfNotPresent
+
+# Superuser 패스워드 — Secret 참조
+settings:
+  existingSecret: postgres-secret
+  superuserPassword:
+    secretKey: postgres-password
+
+# DB / 유저 / 패스워드 — existingSecret + 각 secretKey 명시
+userDatabase:
+  existingSecret: postgres-secret
+  name:
+    secretKey: POSTGRES_DB
+  user:
+    secretKey: POSTGRES_USER
+  password:
+    secretKey: POSTGRES_PASSWORD
+
+storage:
+  persistentVolumeClaim:
+    storageClassName: standard
+    size: 5Gi
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

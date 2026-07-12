@@ -1,0 +1,29 @@
+# Valkey 9.1 — valkey-io 공식 Helm chart
+# Helm repo: valkey https://valkey.io/valkey-helm/
+# Image: valkey/valkey:9.1 (2025-06-29 기준 stable)
+
+image:
+  repository: valkey/valkey
+  tag: "9.1"
+  pullPolicy: IfNotPresent
+
+# standalone 모드 (replica 비활성)
+replica:
+  enabled: false
+
+# 데이터 영속성
+dataStorage:
+  enabled: true
+  requestedSize: 2Gi
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# 인증 비활성 (개발환경)
+auth:
+  enabled: false

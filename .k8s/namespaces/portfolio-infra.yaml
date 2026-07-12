@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: portfolio-infra
+  labels:
+    managed-by: portfolio-root
+    role: shared-infra

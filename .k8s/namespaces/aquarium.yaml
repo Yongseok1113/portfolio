@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aquarium-system
+  labels:
+    managed-by: portfolio-root
+    project: aquarium
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aquarium-workers
+  labels:
+    managed-by: portfolio-root
+    project: aquarium

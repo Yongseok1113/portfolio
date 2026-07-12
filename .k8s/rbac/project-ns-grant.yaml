@@ -1,0 +1,25 @@
+# 프로젝트 SA에 자기 ns 접근 + infra ConfigMap 읽기 권한 부여
+# cluster-up.sh --project <name> 실행 시 해당 ns에 자동 적용
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: project-basic-role
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "services", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: project-basic-rolebinding
+subjects:
+  - kind: ServiceAccount
+    name: default
+roleRef:
+  kind: Role
+  apiGroup: rbac.authorization.k8s.io
+  name: project-basic-role

@@ -44,7 +44,7 @@ LLM 백엔드는 루트 공유 인프라의 결정(Groq API, OpenAI 호환)을 �
 | 규칙 기반 Monitor (논문 임계값 표) | ✅ | `src/adp_ma/meta_agents/monitor.py` |
 | Case folder 감사 추적 | ✅ | `src/adp_ma/state/case_folder.py` |
 | 에이전트 라이브러리 재사용 | ✅ (인메모리) | `src/adp_ma/meta_agents/architect.py` |
-| 샌드박스 | 네임스페이스 격리 (프로세스 격리는 K8s Job 로드맵) | `src/adp_ma/ground/sandbox.py` |
+| 샌드박스 | 네임스페이스 격리 + **K8s Job 프로세스 격리** (`EXECUTOR=k8s`) | `src/adp_ma/ground/sandbox.py`, `k8s_executor.py` |
 | 병렬 dispatch (autonomous/hybrid) | ⬜ centralized만 | 로드맵 |
 | 다중 소스 join, 비용 추적, HITL 체크포인트 | ⬜ | 로드맵 |
 
@@ -64,9 +64,28 @@ uv run adp-ma run -i examples/sales_raw.csv \
 uv run pytest          # LLM 없이 도는 결정적 테스트 (contracts/monitor/sampling/sandbox)
 ```
 
-## K8s 통합 (로드맵)
+## K8s Job 실행 (프로세스 격리)
 
-- 루트 `infra-endpoints` ConfigMap의 `GROQ_BASE_URL`/`GROQ_MODEL`, `groq-secret`의 `GROQ_API_KEY`를 그대로 env로 주입 — 코드 수정 불필요
-- ground agent 실행을 `adp-ma-workers` 네임스페이스의 K8s Job으로 분리 → 논문의 프로세스 격리 확보
-- case folder를 MinIO로, 실행 큐를 Valkey로 이전
-- 이후 **AutoKaggle** 논문 구조(reader/planner/developer/reviewer 협업 + 단계별 검증)로 확장 — 메타-에이전트 계층과 progressive validation이 그대로 재사용됨
+ground agent 1회 실행 = `adp-ma-workers` 네임스페이스의 Job 1개.
+controller ↔ worker 데이터 교환은 MinIO(`adp-ma` 버킷, parquet)로 한다.
+
+```bash
+# 1회 준비: minio-secret 복제 + RBAC + worker 이미지 빌드 (minikube 내부)
+bash .k8s/scripts/setup.sh
+
+# 클러스터 밖(로컬 CLI)에서 디스패치할 때
+kubectl port-forward svc/minio 9000:9000 -n portfolio-infra &
+EXECUTOR=k8s MINIO_ENDPOINT=http://127.0.0.1:9000 \
+  uv run adp-ma run -i examples/sales_raw.csv -g "..."
+# (MINIO_ROOT_USER/PASSWORD·GROQ_API_KEY는 .env로 — 루트 .k8s/.env와 동일 키)
+```
+
+- Job은 `backoffLimit: 0` — 코드 오류 재시도는 refine 루프가 담당하고, Job 레벨 실패는 인프라 오류로 구분
+- worker 파드는 실행 성패를 `status.json`으로 전달하고 항상 정상 종료
+- 코드 변경 시 이미지 재빌드 필요: `minikube -p portfolio image build -t adp-ma:0.1.0 adp-ma/`
+
+## 로드맵
+
+- case folder MinIO 이전, 실행 큐 Valkey, in-cluster controller 배포(RBAC은 준비됨)
+- 병렬 dispatch (autonomous/hybrid), HITL 체크포인트, 비용 추적
+- **AutoKaggle** 논문 구조(reader/planner/developer/reviewer 협업 + 단계별 검증)로 확장 — 메타-에이전트 계층과 progressive validation이 그대로 재사용됨

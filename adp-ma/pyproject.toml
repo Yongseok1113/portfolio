@@ -12,6 +12,9 @@ dependencies = [
     "openai>=1.35",
     "typer>=0.12",
     "rich>=13.7",
+    "minio>=7.2",
+    "pyarrow>=16.0",
+    "kubernetes>=29.0",
 ]
 
 [project.scripts]

@@ -15,7 +15,7 @@ from adp_ma.meta_agents.orchestrator import Phase
 
 _EXPAND_SYSTEM = f"""\
 You are the Architect of an autonomous data processing system.
-Convert one pipeline phase into 1-3 concrete ground agents executed in order.
+Convert one pipeline phase into 1-4 concrete ground agents executed in order.
 Agent types: {", ".join(AGENT_TYPES)}.
 Each agent transforms a single pandas DataFrame (df in, df out).
 Also declare a schema contract per agent. Return JSON:
@@ -60,6 +60,20 @@ _REFINE_SYSTEM = _CODEGEN_SYSTEM + """
 The previous implementation failed. Fix the root cause of the error.
 Do not repeat the same approach if the error indicates it cannot work."""
 
+_TOOLPLAN_SYSTEM = """\
+You select tools from a validated ML tools library to accomplish one agent's objective.
+Prefer tools over custom code whenever they suffice. Chain multiple tools in order if needed.
+Column names in params MUST exist in the data profile — copy them exactly.
+Check the profile's sample values: formatted number strings ("$1,234.56") need parse_numeric
+(convert_dtypes cannot strip symbols). If no tool truly fits a step, return [] — a wrong
+tool chain that silently corrupts values is worse than generated code.
+Return JSON: {"tool_plan": [{"tool": "<name>", "params": {...}}]}
+If the objective cannot be fully done with these tools, return {"tool_plan": []}
+(custom code will be generated instead — do not force a partial fit).
+
+## Tool catalog
+"""
+
 
 class Architect:
     def __init__(self, llm: LLMClient):
@@ -89,6 +103,27 @@ class Architect:
         for spec in specs:
             spec.hints = hints
         return specs
+
+    # ── 도구 우선 경로 (AutoKaggle tools library) ────────────────────────────
+    def plan_tools(self, spec: GroundAgentSpec, profile_text: str) -> list[dict]:
+        """objective를 도구 체인으로 매핑. 불가하면 [] (codegen 폴백)."""
+        from adp_ma.tools import describe_tools, validate_tool_plan
+
+        user = (
+            f"## Agent objective\n{spec.objective}\n"
+            f"## Data profile\n{profile_text}"
+        )
+        if spec.hints:
+            user += f"\n## Hints from previous failure\n{spec.hints}"
+        try:
+            data = self.llm.chat_json(_TOOLPLAN_SYSTEM + describe_tools(), user)
+        except ValueError:
+            return []
+        plan = data.get("tool_plan", []) if isinstance(data, dict) else data
+        if not isinstance(plan, list) or not plan:
+            return []
+        # 정적 검증 실패한 계획은 버리고 codegen으로 — 도구 오용보다 폴백이 안전
+        return plan if validate_tool_plan(plan) == "" else []
 
     # ── 코드 생성 / 수정 ─────────────────────────────────────────────────────
     def generate_code(self, spec: GroundAgentSpec, profile_text: str) -> str:

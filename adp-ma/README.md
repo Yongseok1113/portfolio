@@ -112,14 +112,17 @@ uv run python examples/benchmark.py --model llama-3.3-70b-versatile --runs 3
 
 2026-07-13 측정 (동일 목표: 중복 제거→정규화→표준화→월별·지역별 집계):
 
-| 모델 | 완주 | 합계 오차 | 그룹 | 소요 | 판정 |
-|---|---|---|---|---|---|
-| llama-3.3-70b-versatile | ✅ 21 calls | **0.0%** | 18/18 | 60s | **pass** |
-| llama-3.1-8b-instant | ❌ plan 재시도 소진 | — | — | 600s | fail |
+| 모델 | 완주 | 합계 오차 | 그룹 | 컬럼명 정확 | 소요 | 판정 |
+|---|---|---|---|---|---|---|
+| openai/gpt-oss-20b | ✅ 17 calls | **0.0%** | 18/18 | ✅ | 180s | **pass** |
+| llama-3.3-70b-versatile | ✅ 21 calls | **0.0%** | 18/18 | ✗ | 60s | **pass** |
+| llama-4-scout-17b | ✅ 완주하나 집계 오류 | 76.2% | 31행 | ✗ | 11s | fail |
+| llama-3.1-8b-instant | ❌ plan 재시도 소진 | — | — | — | 600s | fail |
 
 - 8b는 스키마 계약 위반(dedup 중 필수 컬럼 유실)을 refine으로 복구하지 못함 —
   프레임워크가 오염된 출력을 정확히 **거부**한 사례 (감사 추적에 전 과정 기록)
-- 기본 모델은 `llama-3.3-70b-versatile` (인프라 ConfigMap과 동일)
+- **모델 계층화**: 로컬 개발 기본값 `openai/gpt-oss-20b`(TPD 쿼터가 70b와 분리 — 개발 반복이
+  데모 쿼터를 소진하지 않음), 클러스터는 ConfigMap의 `llama-3.3-70b-versatile` env가 덮어씀
 - 프롬프트 규칙: 정제 단계는 행 보존(coerce), 집계 단계는 `.agg`(not `.transform`) —
   집계·중복제거처럼 행 감소가 계약된 단계는 Monitor의 행 소실 룰을 WARN으로 완화
 

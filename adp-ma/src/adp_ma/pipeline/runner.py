@@ -24,8 +24,11 @@ from adp_ma.meta_agents import (
     Monitor,
     Orchestrator,
     Phase,
+    Reader,
     StepMetrics,
+    Summarizer,
     Verdict,
+    assemble_final_report,
 )
 from adp_ma.pipeline.workflows import kaggle_phases
 from adp_ma.profiling import overall_null_rate, profile_dataframe, profile_to_prompt
@@ -68,7 +71,13 @@ class PipelineRunner:
         self.orchestrator = Orchestrator(self.llm)
         self.architect = Architect(self.llm)
         self.monitor = Monitor()
+        self.reader = Reader(self.llm)          # M2 — task brief
+        self.summarizer = Summarizer(self.llm)  # M2 — phase report 압축
         self._execute = run_agent_code  # run 시작 시 executor 설정에 따라 교체
+        # kaggle 워크플로 실행 중 최종 report.md 조립용 상태
+        self._brief = ""
+        self._report_sections: list[tuple[str, str]] = []
+        self._phase_events: list[dict] = []
 
     def _make_executor(self, run_id: str):
         if self.settings.executor == "k8s":
@@ -79,8 +88,17 @@ class PipelineRunner:
             return K8sJobExecutor(self.settings, store, run_id)
         return run_agent_code
 
-    def run(self, input_path: str | Path, goal: str, output_path: str | Path | None = None) -> PipelineResult:
+    def run(
+        self,
+        input_path: str | Path,
+        goal: str,
+        output_path: str | Path | None = None,
+        task_doc: str | Path | None = None,
+    ) -> PipelineResult:
         case = CaseFolder(self.settings.runs_dir)
+        self._task_doc = Path(task_doc).read_text(encoding="utf-8") if task_doc else ""
+        self._brief = ""
+        self._report_sections = []
         self._execute = self._make_executor(case.run_id)
         case.record("executor", {"mode": self.settings.executor})
         df = _read_table(Path(input_path))
@@ -107,6 +125,18 @@ class PipelineRunner:
             out = Path(output_path) if output_path else case.dir / "output.csv"
             df_final.to_csv(out, index=False)
             case.record("finalize", {"output": str(out), "n_rows": len(df_final)})
+            # M2 — 최종 리포트 조립 (사람이 읽는 실행 요약)
+            report_md = assemble_final_report(
+                goal, self._brief, self._report_sections,
+                {
+                    "output": str(out),
+                    "rows": len(df_final),
+                    "columns": ", ".join(map(str, df_final.columns)),
+                    "llm_calls": self.llm.calls,
+                    "tokens": self.llm.total_tokens,
+                },
+            )
+            case.save_text("report.md", report_md)
             return self._result(
                 True, "완료 (kaggle 워크플로: 클리닝·FE까지 — 모델링은 M3)", case,
                 output_path=str(out), phases_completed=done,
@@ -169,15 +199,27 @@ class PipelineRunner:
             if phase.kind == "skip":
                 case.record("phase_skipped", {"phase": phase.name, "reason": phase.objective})
                 continue
+            if phase.kind == "reader":
+                # M2 — Reader: task brief 생성, 전 phase 공통 컨텍스트
+                profile_now = profile_to_prompt(profile_dataframe(current))
+                self._brief = self.reader.brief(goal, profile_now, self._task_doc)
+                case.save_text("brief.md", self._brief)
+                case.record("reader", {"phase": phase.name, "task_doc": bool(self._task_doc)})
+                continue
             if phase.kind == "analysis":
                 self._run_analysis(phase, current, goal, insights, case)
+                if insights:  # 최종 리포트에 분석 원문 수록
+                    self._report_sections.append((phase.name, insights[-1]))
                 continue
 
             snapshot = current  # 직전 성공 상태 — 실패 시 여기서 재시작
             # 앞 phase들이 스키마를 바꿨으므로 매 phase 현재 상태를 다시 프로파일
             phase_profile = profile_to_prompt(profile_dataframe(snapshot))
+            if self._brief:
+                phase_profile += "\n\n## Task brief\n" + self._brief
             if insights:
                 phase_profile += "\n\n## EDA findings so far\n" + "\n".join(insights)
+            self._phase_events = []  # M2 — Summarizer용 이벤트 수집 초기화
             failures = 0
             hints = ""
             while True:
@@ -185,6 +227,13 @@ class PipelineRunner:
                 if ok:
                     current = new_df
                     case.record("phase_done", {"phase": phase.name, "rows": len(current)})
+                    # M2 — Summarizer: phase 실행 로그를 압축해 이후 phase 컨텍스트로
+                    if self.settings.workflow == "kaggle" and self._phase_events:
+                        summary = self.summarizer.summarize_phase(phase.name, self._phase_events)
+                        case.save_text(f"report-{phase.name}.md", summary)
+                        case.record("phase_report", {"phase": phase.name, "chars": len(summary)})
+                        insights.append(f"### {phase.name} (완료된 작업)\n{summary[:800]}")
+                        self._report_sections.append((phase.name, summary))
                     break
                 failures += 1
                 case.record("phase_backtrack", {"phase": phase.name, "count": failures, "error": err[:500]})
@@ -233,6 +282,18 @@ class PipelineRunner:
             case.record(
                 "monitor",
                 {"agent": spec.name, "verdict": report.verdict.value, "findings": report.findings},
+            )
+            # M2 — Summarizer용 이벤트 (phase 단위로 수집)
+            self._phase_events.append(
+                {
+                    "agent": spec.name,
+                    "objective": spec.objective[:200],
+                    "mode": "tools" if spec.tool_plan else "codegen",
+                    "tools": [s["tool"] for s in spec.tool_plan],
+                    "rows": f"{metrics.rows_in}->{metrics.rows_out}",
+                    "verdict": report.verdict.value,
+                    "findings": report.findings,
+                }
             )
             if report.verdict == Verdict.ABORT:
                 raise PipelineAbort("; ".join(report.findings))

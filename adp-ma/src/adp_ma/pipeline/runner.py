@@ -52,6 +52,9 @@ _AGGREGATION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# train/test 결합 파이프라인의 분할 마커 (M3 — 모델링용 보호 컬럼)
+_SPLIT_COL = "__adp_split"
+
 
 class PipelineResult(BaseModel):
     ok: bool
@@ -62,6 +65,10 @@ class PipelineResult(BaseModel):
     plan_retries: int = 0
     llm_calls: int = 0
     total_tokens: int = 0
+    # M3 — 모델링 결과 (test 데이터 제공 시)
+    submission_path: str | None = None
+    best_model: str = ""
+    cv_score: float | None = None
 
 
 class PipelineRunner:
@@ -94,14 +101,54 @@ class PipelineRunner:
         goal: str,
         output_path: str | Path | None = None,
         task_doc: str | Path | None = None,
+        test_data: str | Path | None = None,
+        sample_submission: str | Path | None = None,
+        target: str | None = None,
     ) -> PipelineResult:
         case = CaseFolder(self.settings.runs_dir)
         self._task_doc = Path(task_doc).read_text(encoding="utf-8") if task_doc else ""
         self._brief = ""
         self._report_sections = []
+        self._split_active = False
+        self._submission_path = None
+        self._model_report = None
+        self._guard = ""
         self._execute = self._make_executor(case.run_id)
         case.record("executor", {"mode": self.settings.executor})
         df = _read_table(Path(input_path))
+
+        # ── M3: test 데이터 제공 시 train+test 결합 파이프라인 + 모델링 활성 ──
+        if test_data is not None:
+            if sample_submission is None:
+                return self._result(False, "--test-data 사용 시 --sample-submission 필수", case)
+            test_df = _read_table(Path(test_data))
+            self._sample_submission = pd.read_csv(sample_submission)
+            self._id_col = str(self._sample_submission.columns[0])
+            self._target = str(target or self._sample_submission.columns[1])
+            if self._target not in df.columns:
+                return self._result(False, f"target 컬럼 '{self._target}' 이 train에 없음", case)
+            if self._id_col not in df.columns or self._id_col not in test_df.columns:
+                return self._result(False, f"id 컬럼 '{self._id_col}' 이 train/test에 없음", case)
+            # 구조적 target 보호 — LLM 단계가 target을 스케일/변형해도
+            # 모델링 직전에 id 기준으로 원본을 복원한다 (프롬프트 가드는 보조 수단)
+            self._target_map = dict(zip(df[self._id_col], df[self._target]))
+            df = pd.concat(
+                [df.assign(**{_SPLIT_COL: "train"}), test_df.assign(**{_SPLIT_COL: "test"})],
+                ignore_index=True,
+            )
+            self._split_active = True
+            self._guard = (
+                "\n\n## Protected columns (MUST keep intact)\n"
+                f"- '{_SPLIT_COL}': train/test split marker — never drop, modify, encode or use as a feature\n"
+                f"- '{self._id_col}': row identifier — never drop or transform\n"
+                f"- '{self._target}': prediction target — never impute, scale, encode or transform it; "
+                "NaN on test rows is expected; never drop rows because this column is null"
+            )
+            case.record(
+                "split",
+                {"train": len(df) - len(test_df), "test": len(test_df),
+                 "target": self._target, "id": self._id_col},
+            )
 
         # Stage 1 — Data Understanding
         profile = profile_dataframe(df)
@@ -111,7 +158,7 @@ class PipelineRunner:
 
         # ── kaggle 워크플로: 고정 6-phase 스켈레톤 (plan-level 재계획 없음) ──
         if self.settings.workflow == "kaggle":
-            phases = kaggle_phases(goal)
+            phases = kaggle_phases(goal, with_modeling=self._split_active)
             case.save_json("plan-kaggle.json", [p.model_dump() for p in phases])
             case.record("plan", {"workflow": "kaggle", "phases": [p.name for p in phases]})
             try:
@@ -137,9 +184,21 @@ class PipelineRunner:
                 },
             )
             case.save_text("report.md", report_md)
+            model_kw = {}
+            if self._model_report is not None:
+                model_kw = {
+                    "submission_path": self._submission_path,
+                    "best_model": self._model_report.best_model,
+                    "cv_score": self._model_report.best_score,
+                }
+            message = (
+                "완료 (kaggle 워크플로: 모델링·submission 포함)"
+                if self._split_active
+                else "완료 (kaggle 워크플로: 클리닝·FE까지 — test 데이터 없어 모델링 생략)"
+            )
             return self._result(
-                True, "완료 (kaggle 워크플로: 클리닝·FE까지 — 모델링은 M3)", case,
-                output_path=str(out), phases_completed=done,
+                True, message, case,
+                output_path=str(out), phases_completed=done, **model_kw,
             )
 
         plan_retries = 0
@@ -211,10 +270,18 @@ class PipelineRunner:
                 if insights:  # 최종 리포트에 분석 원문 수록
                     self._report_sections.append((phase.name, insights[-1]))
                 continue
+            if phase.kind == "modeling":
+                # M3 — 검증된 자체 코드로 모델 선택·학습·예측·submission (LLM 무관)
+                ok, err = self._run_modeling(current, case)
+                if not ok:
+                    return False, None, err, i
+                continue
 
             snapshot = current  # 직전 성공 상태 — 실패 시 여기서 재시작
             # 앞 phase들이 스키마를 바꿨으므로 매 phase 현재 상태를 다시 프로파일
             phase_profile = profile_to_prompt(profile_dataframe(snapshot))
+            if self._guard:
+                phase_profile += self._guard
             if self._brief:
                 phase_profile += "\n\n## Task brief\n" + self._brief
             if insights:
@@ -224,6 +291,11 @@ class PipelineRunner:
             hints = ""
             while True:
                 ok, new_df, err = self._run_phase(phase, snapshot, phase_profile, case, hints)
+                if ok and self._split_active:
+                    # 보호 컬럼(분할 마커·id) 유실은 phase 실패로 처리 → 백트래킹
+                    missing = [c for c in (_SPLIT_COL, self._id_col) if c not in new_df.columns]
+                    if missing:
+                        ok, err = False, f"보호 컬럼 유실: {missing} — 제거·변형 금지 대상"
                 if ok:
                     current = new_df
                     case.record("phase_done", {"phase": phase.name, "rows": len(current)})
@@ -347,6 +419,48 @@ class PipelineRunner:
         if not ladder.ok:
             return None, 0.0, ladder.revisions, 0.0, ladder.last_error
         return ladder.df, ladder.elapsed_s, ladder.revisions, ladder.peak_mem_mb, ""
+
+    # ── modeling phase (M3): 모델 선택·학습·예측 → submission.csv ───────────
+    def _run_modeling(self, df: pd.DataFrame, case: CaseFolder) -> tuple[bool, str]:
+        from adp_ma.modeling import build_submission, train_validate_predict
+
+        if _SPLIT_COL not in df.columns:
+            return False, f"분할 마커 '{_SPLIT_COL}' 유실 — 모델링 불가"
+        train = df[df[_SPLIT_COL] == "train"].drop(columns=[_SPLIT_COL]).copy()
+        test = df[df[_SPLIT_COL] == "test"].drop(columns=[_SPLIT_COL]).copy()
+        # target 원본 복원 (id 기준) — 파이프라인이 target을 변형했어도 무해화
+        train[self._target] = train[self._id_col].map(self._target_map)
+        restored = int(train[self._target].notna().sum())
+        case.record("target_restore", {"restored": restored, "train_rows": len(train)})
+        if restored == 0:
+            return False, f"target 복원 실패 — id 컬럼 '{self._id_col}' 값이 변형된 듯"
+        try:
+            report, preds = train_validate_predict(
+                train, test, self._target, exclude=[self._id_col]
+            )
+            submission = build_submission(self._sample_submission, test, preds)
+        except (KeyError, ValueError) as e:
+            return False, f"모델링 실패: {e}"
+
+        sub_path = case.dir / "submission.csv"
+        submission.to_csv(sub_path, index=False)
+        self._submission_path = str(sub_path)
+        self._model_report = report
+        case.record(
+            "modeling",
+            {"task": report.task, "best": report.best_model, "cv_scores": report.cv_scores,
+             "metric": report.metric, "n_features": len(report.features)},
+        )
+        summary = (
+            f"- task: {report.task} (target={report.target})\n"
+            f"- CV 비교: {report.cv_scores} → best **{report.best_model}** "
+            f"({report.metric}={report.best_score})\n"
+            f"- 피처 {len(report.features)}개, train {report.n_train}행 → test {report.n_test}행 예측\n"
+            f"- submission: {sub_path.name}"
+        )
+        case.save_text("report-modeling.md", summary)
+        self._report_sections.append(("modeling", summary))
+        return True, ""
 
     # ── analysis phase: 데이터 변경 없이 인사이트만 생산 ──────────────────────
     def _run_analysis(

@@ -24,6 +24,15 @@ def run(
     task_doc: Optional[Path] = typer.Option(
         None, "--task-doc", exists=True, help="과제 문서(markdown) — Reader가 task brief 생성에 사용"
     ),
+    test_data: Optional[Path] = typer.Option(
+        None, "--test-data", exists=True, help="test 데이터 — 지정 시 모델링 phase 활성 (kaggle 워크플로)"
+    ),
+    sample_submission: Optional[Path] = typer.Option(
+        None, "--sample-submission", exists=True, help="제출 양식 csv (첫 컬럼=id, 둘째=target)"
+    ),
+    target: Optional[str] = typer.Option(
+        None, "--target", help="target 컬럼명 (기본: sample_submission 둘째 컬럼)"
+    ),
 ):
     """자연어 목표로 데이터 파이프라인을 자율 구성·실행한다."""
     settings = Settings(**({"workflow": workflow} if workflow else {}))
@@ -38,7 +47,11 @@ def run(
 
     console.print(f"[cyan]goal[/cyan]: {goal}")
     console.print(f"[cyan]input[/cyan]: {input}")
-    result = PipelineRunner(settings).run(input, goal, output, task_doc=task_doc)
+    result = PipelineRunner(settings).run(
+        input, goal, output,
+        task_doc=task_doc, test_data=test_data,
+        sample_submission=sample_submission, target=target,
+    )
 
     style = "green" if result.ok else "red"
     console.print(f"\n[{style}]{'성공' if result.ok else '실패'}[/{style}]: {result.message}")
@@ -49,6 +62,11 @@ def run(
     console.print(f"감사 추적: {result.run_dir}/decisions.jsonl")
     if result.output_path:
         console.print(f"출력: {result.output_path}")
+    if result.submission_path:
+        console.print(
+            f"submission: {result.submission_path} "
+            f"(best={result.best_model}, cv={result.cv_score})"
+        )
     raise typer.Exit(0 if result.ok else 1)
 
 

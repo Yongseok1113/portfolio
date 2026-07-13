@@ -84,12 +84,13 @@ EXECUTOR=k8s MINIO_ENDPOINT=http://127.0.0.1:9000 \
 - worker 파드는 실행 성패를 `status.json`으로 전달하고 항상 정상 종료
 - 코드 변경 시 이미지 재빌드 필요: `minikube -p portfolio image build -t adp-ma:0.1.0 adp-ma/`
 
-## AutoKaggle 워크플로 (M1·M2)
+## AutoKaggle 워크플로 (M1~M3)
 
-[설계 문서](docs/autokaggle-design.md)의 M1(tools library + 6-phase) + M2(Reader·Summarizer) 구현.
+[설계 문서](docs/autokaggle-design.md)의 M1(tools library + 6-phase) + M2(Reader·Summarizer) + M3(모델링·submission) 구현.
 
 ```bash
-uv run adp-ma run --workflow kaggle -i data.csv -g "..." [--task-doc task.md]
+uv run adp-ma run --workflow kaggle -i train.csv -g "..." \
+  [--task-doc task.md] [--test-data test.csv --sample-submission sub.csv [--target y]]
 ```
 
 - 6-phase 스켈레톤: 배경이해 → 예비 EDA → 클리닝 → 심층 EDA → Feature Engineering → 모델링(M3 예정)
@@ -104,6 +105,19 @@ uv run adp-ma run --workflow kaggle -i data.csv -g "..." [--task-doc task.md]
 - **Summarizer** (M2): transform phase 종료마다 실행 이벤트를 압축(`report-<phase>.md`) —
   이후 phase가 "앞에서 무엇을 했는지" 알게 되고, 원시 로그 대신 요약만 컨텍스트에 주입해 토큰 절감
 - 실행 종료 시 `report.md` 자동 조립: goal + brief + phase별 요약 + 결과 (사람이 읽는 실행 보고서)
+- **모델링** (M3): `--test-data` 지정 시 train+test를 `__adp_split` 마커로 결합해 클리닝·FE를
+  동일 적용 → 후보 3모델 CV 비교·선택 → 전체 학습 → test 예측 → `submission.csv`
+  (sample_submission 스키마 준수). LLM 무관 검증 코드(sklearn)라 샌드박스 밖에서 실행
+- **target 구조적 보호** (M3): LLM 단계가 target을 스케일/변형해도 모델링 직전 id 기준으로
+  원본 복원 — 프롬프트 가드(보호 컬럼 명시)는 보조 수단. 보호 컬럼(마커·id) 유실은 백트래킹 처리
+
+### VS/CS 벤치마크 (M3, 논문 지표 모사)
+
+`examples/benchmark_model.py` — 합성 churn 분류 과제(통화 문자열·날짜 혼재·중복 오염)로
+VS(제출 유효성) + ANPS(accuracy) → **CS = 0.5·VS + 0.5·ANPS** 채점.
+
+2026-07-13, gpt-oss-20b: **VS 1.0 / accuracy 0.865 (다수결 기준선 0.805 초과) / CS 0.9325**
+— best: logistic_regression (CV 3모델 비교), 23 LLM calls.
 
 ## 품질 벤치마크
 
@@ -132,6 +146,6 @@ uv run python examples/benchmark.py --model llama-3.3-70b-versatile --runs 3
 
 ## 로드맵
 
-- **M3**: 모델링 phase + submission + VS/CS 평가 / **M4**: 단위 테스트 게이트 + HITL
+- **M4**: 단위 테스트 게이트 + HITL 체크포인트 + GPU Job
 - case folder MinIO 이전, 실행 큐 Valkey, in-cluster controller 배포(RBAC은 준비됨)
 - 병렬 dispatch (autonomous/hybrid), 비용 추적

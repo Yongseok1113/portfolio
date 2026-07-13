@@ -24,6 +24,10 @@ RefineFn = Callable[[GroundAgentSpec, str], str]
 VerifyFn = Callable[[pd.DataFrame, pd.DataFrame], ContractVerificationResult | None]
 # run_agent_code와 동일 시그니처 — K8sJobExecutor 등으로 대체 가능
 ExecuteFn = Callable[[str, pd.DataFrame], "SandboxResult"]
+# 단위 테스트 게이트 (M4): (df_in, df_out) → 오류 메시지 또는 ""
+GateFn = Callable[[pd.DataFrame, pd.DataFrame], str]
+# 게이트는 대표성 있는 샘플에서만 실행 (작은 샘플의 위양성 회피)
+_GATE_LEVELS = ("M", "FULL")
 
 
 @dataclass
@@ -45,6 +49,7 @@ def run_ladder(
     max_refine_per_level: int = 3,
     verify: VerifyFn | None = None,
     execute: ExecuteFn = run_agent_code,
+    gate: GateFn | None = None,
 ) -> LadderResult:
     revisions = 0
     for level, n in SAMPLE_LADDER:
@@ -64,12 +69,18 @@ def run_ladder(
                     contract_error = "SchemaContract 위반: " + "; ".join(
                         v.message for v in cvr.critical
                     )
-            if res.ok and not contract_error:
+            gate_error = ""
+            if res.ok and not contract_error and gate is not None and level in _GATE_LEVELS:
+                # M4 — 단위 테스트 게이트: 스키마 계약이 못 잡는 논리 오류 차단
+                gate_error = gate(sample, res.df)
+                if gate_error:
+                    gate_error = f"단위 테스트 실패: {gate_error}"
+            if res.ok and not contract_error and not gate_error:
                 break  # 이 레벨 통과 → 승급
 
             attempts += 1
             revisions += 1
-            error = contract_error or res.error
+            error = contract_error or gate_error or res.error
             if attempts >= max_refine_per_level:
                 return LadderResult(
                     ok=False,

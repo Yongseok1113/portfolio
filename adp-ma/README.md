@@ -84,9 +84,10 @@ EXECUTOR=k8s MINIO_ENDPOINT=http://127.0.0.1:9000 \
 - worker 파드는 실행 성패를 `status.json`으로 전달하고 항상 정상 종료
 - 코드 변경 시 이미지 재빌드 필요: `minikube -p portfolio image build -t adp-ma:0.1.0 adp-ma/`
 
-## AutoKaggle 워크플로 (M1~M3)
+## AutoKaggle 워크플로 (M1~M4 완료)
 
-[설계 문서](docs/autokaggle-design.md)의 M1(tools library + 6-phase) + M2(Reader·Summarizer) + M3(모델링·submission) 구현.
+[설계 문서](docs/autokaggle-design.md)의 전체 마일스톤 구현: M1(tools library + 6-phase),
+M2(Reader·Summarizer), M3(모델링·submission), M4(단위 테스트 게이트·HITL·GPU 옵션).
 
 ```bash
 uv run adp-ma run --workflow kaggle -i train.csv -g "..." \
@@ -110,6 +111,13 @@ uv run adp-ma run --workflow kaggle -i train.csv -g "..." \
   (sample_submission 스키마 준수). LLM 무관 검증 코드(sklearn)라 샌드박스 밖에서 실행
 - **target 구조적 보호** (M3): LLM 단계가 target을 스케일/변형해도 모델링 직전 id 기준으로
   원본 복원 — 프롬프트 가드(보호 컬럼 명시)는 보조 수단. 보호 컬럼(마커·id) 유실은 백트래킹 처리
+- **단위 테스트 게이트** (M4): codegen 경로에서 Architect가 `check(df_in, df_out)` 테스트를
+  생성해 M/FULL 승급 전에 실행 — 스키마 계약이 못 잡는 논리 오류 차단. 테스트 자체 결함으로
+  실패가 반복되면 게이트를 무력화하고 진행(`gate_disabled` 기록) — 논문 assistance mechanism 축소판
+- **HITL 체크포인트** (M4): `--interactive` — 계획 확정 후 실행 전에 승인 요청, 반려 시
+  LLM 실행 없이 중단 (AutoKaggle UserInteractionEnabled 대응)
+- **GPU Job 옵션** (M4): `WORKER_GPU=true` — worker Job에 `nvidia.com/gpu: 1` 요청
+  (루트 cluster-up이 device plugin 설치, RTX 3060)
 
 ### VS/CS 벤치마크 (M3, 논문 지표 모사)
 
@@ -144,8 +152,8 @@ uv run python examples/benchmark.py --model llama-3.3-70b-versatile --runs 3
 - 프롬프트 규칙: 정제 단계는 행 보존(coerce), 집계 단계는 `.agg`(not `.transform`) —
   집계·중복제거처럼 행 감소가 계약된 단계는 Monitor의 행 소실 룰을 WARN으로 완화
 
-## 로드맵
+## 로드맵 (M1~M4 이후)
 
-- **M4**: 단위 테스트 게이트 + HITL 체크포인트 + GPU Job
+- 품질 게이트 A/B 실험 (계약만 vs 계약+단위테스트) — Groq TPD 쿼터 확보 후
 - case folder MinIO 이전, 실행 큐 Valkey, in-cluster controller 배포(RBAC은 준비됨)
-- 병렬 dispatch (autonomous/hybrid), 비용 추적
+- 병렬 dispatch (autonomous/hybrid), 비용 추적, 실제 Kaggle 데이터셋 평가

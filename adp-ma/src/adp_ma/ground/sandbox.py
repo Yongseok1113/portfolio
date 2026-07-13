@@ -58,6 +58,26 @@ class SandboxResult:
     peak_mem_mb: float = 0.0
 
 
+def run_gate_code(code: str, df_in: pd.DataFrame, df_out: pd.DataFrame) -> str:
+    """단위 테스트 게이트 (M4) — `def check(df_in, df_out)` 코드를 샌드박스에서 실행.
+
+    통과면 빈 문자열, 실패면 오류 메시지를 반환한다.
+    """
+    ns = _make_namespace()
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            exec(compile(code, "<unit-test-gate>", "exec"), ns)  # noqa: S102
+            fn = ns.get("check")
+            if not callable(fn):
+                return "게이트 코드에 check(df_in, df_out) 함수가 없음"
+            fn(df_in.copy(), df_out.copy())
+        return ""
+    except AssertionError as e:
+        return f"AssertionError: {e}"
+    except Exception:
+        return traceback.format_exc(limit=3)
+
+
 def run_agent_code(code: str, df: pd.DataFrame) -> SandboxResult:
     """code를 실행해 run(df)를 호출하고 결과 DataFrame을 돌려준다."""
     ns = _make_namespace()

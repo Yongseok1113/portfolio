@@ -60,6 +60,20 @@ _REFINE_SYSTEM = _CODEGEN_SYSTEM + """
 The previous implementation failed. Fix the root cause of the error.
 Do not repeat the same approach if the error indicates it cannot work."""
 
+_UNITTEST_SYSTEM = """\
+You write ONE validation function for a data pipeline step (M4 unit-test gate).
+Rules:
+- Define exactly: def check(df_in, df_out) -> None
+- Use assert statements with clear messages to verify the step's LOGIC beyond schema:
+  value ranges, expected categories, parsing correctness, row-count relations,
+  no unintended data loss or value corruption.
+- pandas as pd, numpy as np available. Same import whitelist as pipeline code.
+- Do NOT re-implement the transformation; only check observable properties.
+- 3-6 asserts. They must pass on a CORRECT implementation — be tolerant to NaN
+  where the objective allows preserving unparseable values, and to sampled subsets
+  (never assert exact row counts unless the objective fixes them).
+Return ONLY the code in one ```python block."""
+
 _TOOLPLAN_SYSTEM = """\
 You select tools from a validated ML tools library to accomplish one agent's objective.
 Prefer tools over custom code whenever they suffice. Chain multiple tools in order if needed.
@@ -138,6 +152,15 @@ class Architect:
         if spec.hints:
             user += f"\n## Hints\n{spec.hints}"
         return extract_code(self.llm.chat(_CODEGEN_SYSTEM, user))
+
+    def generate_unit_test(self, spec: GroundAgentSpec, profile_text: str) -> str:
+        """spec의 논리 검증용 check(df_in, df_out) 코드 생성 (M4 게이트)."""
+        user = (
+            f"## Step objective\n{spec.objective}\n"
+            f"## Schema contract\n{spec.contract.model_dump_json()}\n"
+            f"## Data profile (input side)\n{profile_text}"
+        )
+        return extract_code(self.llm.chat(_UNITTEST_SYSTEM, user))
 
     def refine_code(self, spec: GroundAgentSpec, error: str) -> str:
         user = (

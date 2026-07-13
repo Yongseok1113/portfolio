@@ -12,10 +12,10 @@ phase.kind:
 
 from adp_ma.meta_agents.orchestrator import Phase
 
-MODELING_SKIP_NOTE = "모델 학습·검증·제출 — M3에서 구현 예정 (sklearn + submission)"
+MODELING_SKIP_NOTE = "모델 학습·검증·제출 — test 데이터(--test-data) 없이는 건너뜀"
 
 
-def kaggle_phases(goal: str) -> list[Phase]:
+def kaggle_phases(goal: str, with_modeling: bool = False) -> list[Phase]:
     return [
         Phase(
             name="background_understanding",
@@ -62,8 +62,12 @@ def kaggle_phases(goal: str) -> list[Phase]:
         ),
         Phase(
             name="modeling",
-            kind="skip",
-            objective=MODELING_SKIP_NOTE,
-            rationale="M3 마일스톤",
+            kind="modeling" if with_modeling else "skip",
+            objective=(
+                "후보 모델 교차검증 비교·선택 → 전체 학습 → test 예측 → submission 생성"
+                if with_modeling
+                else MODELING_SKIP_NOTE
+            ),
+            rationale="AutoKaggle phase 6 (Model Building, Validation, Prediction)",
         ),
     ]

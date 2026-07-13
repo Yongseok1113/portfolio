@@ -33,6 +33,9 @@ def run(
     target: Optional[str] = typer.Option(
         None, "--target", help="target 컬럼명 (기본: sample_submission 둘째 컬럼)"
     ),
+    interactive: bool = typer.Option(
+        False, "--interactive", help="HITL: 계획 확정 후 실행 전에 승인 요청"
+    ),
 ):
     """자연어 목표로 데이터 파이프라인을 자율 구성·실행한다."""
     settings = Settings(**({"workflow": workflow} if workflow else {}))
@@ -47,7 +50,17 @@ def run(
 
     console.print(f"[cyan]goal[/cyan]: {goal}")
     console.print(f"[cyan]input[/cyan]: {input}")
-    result = PipelineRunner(settings).run(
+    runner = PipelineRunner(settings)
+    if interactive:
+        def review_plan(phases) -> bool:
+            console.print("\n[bold]실행 계획[/bold]")
+            for i, p in enumerate(phases, 1):
+                console.print(f"  {i}. [{p.kind}] {p.name} — {p.objective[:80]}")
+            return typer.confirm("이 계획으로 실행할까요?", default=True)
+
+        runner.plan_reviewer = review_plan
+
+    result = runner.run(
         input, goal, output,
         task_doc=task_doc, test_data=test_data,
         sample_submission=sample_submission, target=target,

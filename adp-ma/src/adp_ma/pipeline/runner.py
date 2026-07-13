@@ -81,6 +81,9 @@ class PipelineRunner:
         self.reader = Reader(self.llm)          # M2 — task brief
         self.summarizer = Summarizer(self.llm)  # M2 — phase report 압축
         self._execute = run_agent_code  # run 시작 시 executor 설정에 따라 교체
+        # HITL 체크포인트 (M4) — 계획 확정 후 실행 전에 호출, False면 반려
+        # (AutoKaggle의 UserInteractionEnabled 대응. CLI --interactive가 설정)
+        self.plan_reviewer: object | None = None
         # kaggle 워크플로 실행 중 최종 report.md 조립용 상태
         self._brief = ""
         self._report_sections: list[tuple[str, str]] = []
@@ -161,6 +164,9 @@ class PipelineRunner:
             phases = kaggle_phases(goal, with_modeling=self._split_active)
             case.save_json("plan-kaggle.json", [p.model_dump() for p in phases])
             case.record("plan", {"workflow": "kaggle", "phases": [p.name for p in phases]})
+            if self.plan_reviewer is not None and not self.plan_reviewer(phases):
+                case.record("hitl", {"decision": "rejected"})
+                return self._result(False, "사용자가 계획을 반려함 (HITL)", case)
             try:
                 ok, df_final, evidence, done = self._execute_phases(
                     df, phases, profile_text, case, goal=goal
@@ -217,6 +223,9 @@ class PipelineRunner:
                     continue
                 case.save_json(f"plan-{plan_retries}.json", [p.model_dump() for p in phases])
                 case.record("plan", {"retry": plan_retries, "phases": [p.name for p in phases]})
+                if self.plan_reviewer is not None and not self.plan_reviewer(phases):
+                    case.record("hitl", {"decision": "rejected"})
+                    return self._result(False, "사용자가 계획을 반려함 (HITL)", case, plan_retries=plan_retries)
 
                 # Stage 4·5 — Expansion + Execution
                 ok, df_final, evidence, done = self._execute_phases(df, phases, profile_text, case)
@@ -407,6 +416,7 @@ class PipelineRunner:
                 spec.tool_plan = []
 
         spec.code = self.architect.generate_code(spec, profile_text)
+        gate = self._make_gate(spec, profile_text, case) if self.settings.unit_tests_enabled else None
         ladder = run_ladder(
             spec,
             current,
@@ -414,11 +424,44 @@ class PipelineRunner:
             max_refine_per_level=self.settings.max_refine_attempts,
             verify=lambda d_in, d_out, _c=spec.contract: verify_contract(_c, d_in, d_out),
             execute=self._execute,
+            gate=gate,
         )
         case.save_agent_code(spec.name, spec.code)
         if not ladder.ok:
             return None, 0.0, ladder.revisions, 0.0, ladder.last_error
         return ladder.df, ladder.elapsed_s, ladder.revisions, ladder.peak_mem_mb, ""
+
+    # ── 단위 테스트 게이트 (M4) ──────────────────────────────────────────────
+    def _make_gate(self, spec, profile_text: str, case: CaseFolder):
+        """spec용 단위 테스트를 생성하고 게이트 함수로 감싼다.
+
+        생성된 테스트 자체가 틀렸을 수 있으므로, 게이트 실패가 2회 누적되면
+        게이트를 무력화한다 (계약·샘플링 검증은 계속 유효) — 논문의
+        assistance mechanism(반복 오류 시 루프 탈출)의 축소판.
+        """
+        from adp_ma.ground.sandbox import run_gate_code
+
+        test_code = self.architect.generate_unit_test(spec, profile_text)
+        case.save_agent_code(f"{spec.name}__test", test_code)
+        failures = {"count": 0, "disabled": False}
+
+        def gate(d_in, d_out) -> str:
+            if failures["disabled"]:
+                return ""
+            err = run_gate_code(test_code, d_in, d_out)
+            if err:
+                failures["count"] += 1
+                if failures["count"] >= 2:
+                    failures["disabled"] = True
+                    case.record(
+                        "gate_disabled",
+                        {"agent": spec.name, "reason": err[:200],
+                         "note": "게이트 실패 반복 — 테스트 자체 결함 가능성으로 무력화"},
+                    )
+                    return ""
+            return err
+
+        return gate
 
     # ── modeling phase (M3): 모델 선택·학습·예측 → submission.csv ───────────
     def _run_modeling(self, df: pd.DataFrame, case: CaseFolder) -> tuple[bool, str]:

@@ -95,7 +95,12 @@ class K8sJobExecutor:
             ],
             resources=m.V1ResourceRequirements(
                 requests={"cpu": "100m", "memory": "256Mi"},
-                limits={"cpu": "1", "memory": "1Gi"},
+                limits={
+                    "cpu": "1",
+                    "memory": "1Gi",
+                    # M4 — GPU 워크로드 옵션 (nvidia device plugin은 루트 cluster-up이 설치)
+                    **({"nvidia.com/gpu": "1"} if s.worker_gpu else {}),
+                },
             ),
         )
         return m.V1Job(

@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     workflow: str = "dynamic"
     # 도구 우선 실행 (ML tools library) — 끄면 항상 codegen
     tools_enabled: bool = True
+    # 단위 테스트 게이트 (M4) — codegen 경로의 M/FULL 승급 전 논리 검증
+    unit_tests_enabled: bool = True
 
     # ── ground agent 실행 방식 ───────────────────────────────────────────
     # local: 인프로세스 샌드박스 / k8s: adp-ma-workers ns의 Job (프로세스 격리)
@@ -38,6 +40,8 @@ class Settings(BaseSettings):
     worker_image: str = "adp-ma:0.1.0"
     worker_namespace: str = "adp-ma-workers"
     job_timeout_s: int = 600
+    # worker Job에 GPU 1개 요청 (nvidia device plugin 필요 — 루트 cluster-up이 설치)
+    worker_gpu: bool = False
 
     # MinIO — 루트 infra-endpoints ConfigMap / minio-secret과 동일 키
     minio_endpoint: str = "http://minio.portfolio-infra.svc.cluster.local:9000"

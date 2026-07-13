@@ -84,8 +84,47 @@ EXECUTOR=k8s MINIO_ENDPOINT=http://127.0.0.1:9000 \
 - worker 파드는 실행 성패를 `status.json`으로 전달하고 항상 정상 종료
 - 코드 변경 시 이미지 재빌드 필요: `minikube -p portfolio image build -t adp-ma:0.1.0 adp-ma/`
 
+## AutoKaggle 워크플로 (M1)
+
+[설계 문서](docs/autokaggle-design.md)의 M1 구현 — **ML tools library + 고정 6-phase 워크플로**.
+
+```bash
+uv run adp-ma run --workflow kaggle -i data.csv -g "..."
+```
+
+- 6-phase 스켈레톤: 배경이해 → 예비 EDA → 클리닝 → 심층 EDA → Feature Engineering → 모델링(M3 예정)
+- **analysis phase**는 데이터를 바꾸지 않고 인사이트만 생산해 이후 phase의 컨텍스트로 주입 (`runs/<id>/analysis-*.md`)
+- **도구 우선 실행**: 검증된 도구 16종(cleaning 8 · feature 8) 카탈로그에서 tool plan을 먼저 시도하고,
+  계약 위반·실행 실패 시 codegen으로 폴백. 도구는 검증된 코드라 progressive sampling 없이 즉시 실행
+  (계약·Monitor 검증은 동일 적용)
+- E2E 검증(70b): 6-phase 완주 — 클리닝 4개 에이전트 중 3개가 도구로 처리, 나머지는 폴백으로 codegen
+- 교훈이 된 버그: `convert_dtypes`가 `"$1,234.56"`을 전부 NaN→0으로 만드는 값 파괴 →
+  `parse_numeric` 도구 추가 + tool plan 프롬프트에 "안 맞으면 [] 반환" 명시로 해결
+
+## 품질 벤치마크
+
+`examples/benchmark.py` — 고정 데이터·목표에 대해 산출물을 **결정적 정답**(pandas 직접 계산)과 비교 채점한다.
+지표: schema_ok(퍼지)/schema_exact(지시 준수)/sum_rel_err(합계 오차)/group_ratio(그룹 커버리지).
+
+```bash
+uv run python examples/benchmark.py --model llama-3.3-70b-versatile --runs 3
+```
+
+2026-07-13 측정 (동일 목표: 중복 제거→정규화→표준화→월별·지역별 집계):
+
+| 모델 | 완주 | 합계 오차 | 그룹 | 소요 | 판정 |
+|---|---|---|---|---|---|
+| llama-3.3-70b-versatile | ✅ 21 calls | **0.0%** | 18/18 | 60s | **pass** |
+| llama-3.1-8b-instant | ❌ plan 재시도 소진 | — | — | 600s | fail |
+
+- 8b는 스키마 계약 위반(dedup 중 필수 컬럼 유실)을 refine으로 복구하지 못함 —
+  프레임워크가 오염된 출력을 정확히 **거부**한 사례 (감사 추적에 전 과정 기록)
+- 기본 모델은 `llama-3.3-70b-versatile` (인프라 ConfigMap과 동일)
+- 프롬프트 규칙: 정제 단계는 행 보존(coerce), 집계 단계는 `.agg`(not `.transform`) —
+  집계·중복제거처럼 행 감소가 계약된 단계는 Monitor의 행 소실 룰을 WARN으로 완화
+
 ## 로드맵
 
+- **M2**: Reader(대회 문서 이해) + Summarizer(phase report) / **M3**: 모델링 phase + submission + VS/CS / **M4**: 단위 테스트 게이트 + HITL
 - case folder MinIO 이전, 실행 큐 Valkey, in-cluster controller 배포(RBAC은 준비됨)
-- 병렬 dispatch (autonomous/hybrid), HITL 체크포인트, 비용 추적
-- **AutoKaggle** 논문 구조(reader/planner/developer/reviewer 협업 + 단계별 검증)로 확장 — 메타-에이전트 계층과 progressive validation이 그대로 재사용됨
+- 병렬 dispatch (autonomous/hybrid), 비용 추적

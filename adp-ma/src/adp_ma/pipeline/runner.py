@@ -16,7 +16,7 @@ from pydantic import BaseModel
 import re
 
 from adp_ma.config import Settings
-from adp_ma.contracts import sanitize_contract, verify_contract
+from adp_ma.contracts import RowCountRelation, sanitize_contract, verify_contract
 from adp_ma.ground import run_agent_code, run_ladder
 from adp_ma.llm import LLMClient
 from adp_ma.meta_agents import (
@@ -27,8 +27,16 @@ from adp_ma.meta_agents import (
     StepMetrics,
     Verdict,
 )
+from adp_ma.pipeline.workflows import kaggle_phases
 from adp_ma.profiling import overall_null_rate, profile_dataframe, profile_to_prompt
 from adp_ma.state import CaseFolder
+from adp_ma.tools import execute_tool_plan
+
+_ANALYSIS_SYSTEM = """\
+You are the data analyst of an autonomous pipeline. Given the phase objective,
+the user's goal and the current data profile, produce 3-6 concise bullet findings
+that directly inform the NEXT phases. Reference exact column names.
+Plain text bullets only — no code, no JSON."""
 
 
 class PipelineAbort(Exception):
@@ -83,6 +91,27 @@ class PipelineRunner:
         case.record("data_understanding", {"n_rows": profile["n_rows"], "n_cols": profile["n_cols"]})
         profile_text = profile_to_prompt(profile)
 
+        # ── kaggle 워크플로: 고정 6-phase 스켈레톤 (plan-level 재계획 없음) ──
+        if self.settings.workflow == "kaggle":
+            phases = kaggle_phases(goal)
+            case.save_json("plan-kaggle.json", [p.model_dump() for p in phases])
+            case.record("plan", {"workflow": "kaggle", "phases": [p.name for p in phases]})
+            try:
+                ok, df_final, evidence, done = self._execute_phases(
+                    df, phases, profile_text, case, goal=goal
+                )
+            except PipelineAbort as e:
+                return self._result(False, f"Monitor abort: {e}", case)
+            if not ok:
+                return self._result(False, f"kaggle 워크플로 실패: {evidence}", case, phases_completed=done)
+            out = Path(output_path) if output_path else case.dir / "output.csv"
+            df_final.to_csv(out, index=False)
+            case.record("finalize", {"output": str(out), "n_rows": len(df_final)})
+            return self._result(
+                True, "완료 (kaggle 워크플로: 클리닝·FE까지 — 모델링은 M3)", case,
+                output_path=str(out), phases_completed=done,
+            )
+
         plan_retries = 0
         error_evidence = ""
         try:
@@ -127,13 +156,28 @@ class PipelineRunner:
 
     # ── phase 루프 (phase-level 백트래킹 포함) ────────────────────────────────
     def _execute_phases(
-        self, df: pd.DataFrame, phases: list[Phase], profile_text: str, case: CaseFolder
+        self,
+        df: pd.DataFrame,
+        phases: list[Phase],
+        profile_text: str,
+        case: CaseFolder,
+        goal: str = "",
     ) -> tuple[bool, pd.DataFrame | None, str, int]:
         current = df
+        insights: list[str] = []  # analysis phase가 쌓는 EDA 인사이트 — 이후 phase 컨텍스트
         for i, phase in enumerate(phases):
+            if phase.kind == "skip":
+                case.record("phase_skipped", {"phase": phase.name, "reason": phase.objective})
+                continue
+            if phase.kind == "analysis":
+                self._run_analysis(phase, current, goal, insights, case)
+                continue
+
             snapshot = current  # 직전 성공 상태 — 실패 시 여기서 재시작
             # 앞 phase들이 스키마를 바꿨으므로 매 phase 현재 상태를 다시 프로파일
             phase_profile = profile_to_prompt(profile_dataframe(snapshot))
+            if insights:
+                phase_profile += "\n\n## EDA findings so far\n" + "\n".join(insights)
             failures = 0
             hints = ""
             while True:
@@ -164,27 +208,21 @@ class PipelineRunner:
         for spec in specs:
             # 이 시점의 실제 컬럼 기준으로 환각된 입력측 계약 제거
             sanitize_contract(spec.contract, current.columns)
-            spec.code = self.architect.generate_code(spec, profile_text)
-            ladder = run_ladder(
-                spec,
-                current,
-                refine=self.architect.refine_code,
-                max_refine_per_level=self.settings.max_refine_attempts,
-                verify=lambda d_in, d_out, _c=spec.contract: verify_contract(_c, d_in, d_out),
-                execute=self._execute,
+
+            out_df, elapsed_s, revisions, peak_mem_mb, err = self._execute_spec(
+                spec, current, profile_text, case
             )
-            case.save_agent_code(spec.name, spec.code)
-            if not ladder.ok:
-                return False, None, ladder.last_error
+            if err:
+                return False, None, err
 
             metrics = StepMetrics(
                 rows_in=len(current),
-                rows_out=len(ladder.df),
+                rows_out=len(out_df),
                 null_rate_in=overall_null_rate(current),
-                null_rate_out=overall_null_rate(ladder.df),
-                elapsed_s=ladder.elapsed_s,
-                revisions=ladder.revisions,
-                peak_mem_mb=ladder.peak_mem_mb,
+                null_rate_out=overall_null_rate(out_df),
+                elapsed_s=elapsed_s,
+                revisions=revisions,
+                peak_mem_mb=peak_mem_mb,
             )
             # 집계·중복제거처럼 행 감소가 의도된 단계는 행 소실 룰을 완화
             expect_reduction = (
@@ -201,9 +239,69 @@ class PipelineRunner:
             if report.verdict == Verdict.RETRY:
                 return False, None, "Monitor retry 판정: " + "; ".join(report.findings)
 
-            self.architect.register_validated(spec)
-            current = ladder.df
+            if spec.code:  # codegen 경로만 라이브러리에 등록 (도구는 이미 검증된 코드)
+                self.architect.register_validated(spec)
+            current = out_df
         return True, current, ""
+
+    # ── spec 1개 실행: 도구 우선 → codegen 폴백 ─────────────────────────────
+    def _execute_spec(
+        self, spec, current: pd.DataFrame, profile_text: str, case: CaseFolder
+    ) -> tuple[pd.DataFrame | None, float, int, float, str]:
+        """반환: (출력 df, elapsed_s, revisions, peak_mem_mb, 오류)."""
+        if self.settings.tools_enabled:
+            spec.tool_plan = self.architect.plan_tools(spec, profile_text)
+            if spec.tool_plan:
+                tres = execute_tool_plan(spec.tool_plan, current)
+                contract_err = ""
+                if tres.ok:
+                    cvr = verify_contract(spec.contract, current, tres.df)
+                    if not cvr.ok:
+                        contract_err = "SchemaContract 위반: " + "; ".join(
+                            v.message for v in cvr.critical
+                        )
+                if tres.ok and not contract_err:
+                    case.record(
+                        "tool_plan",
+                        {"agent": spec.name, "tools": [s["tool"] for s in spec.tool_plan]},
+                    )
+                    return tres.df, tres.elapsed_s, 0, 0.0, ""
+                # 도구 실패는 치명적이지 않다 — codegen으로 폴백
+                case.record(
+                    "tool_plan_fallback",
+                    {"agent": spec.name, "error": (tres.error or contract_err)[:300]},
+                )
+                spec.tool_plan = []
+
+        spec.code = self.architect.generate_code(spec, profile_text)
+        ladder = run_ladder(
+            spec,
+            current,
+            refine=self.architect.refine_code,
+            max_refine_per_level=self.settings.max_refine_attempts,
+            verify=lambda d_in, d_out, _c=spec.contract: verify_contract(_c, d_in, d_out),
+            execute=self._execute,
+        )
+        case.save_agent_code(spec.name, spec.code)
+        if not ladder.ok:
+            return None, 0.0, ladder.revisions, 0.0, ladder.last_error
+        return ladder.df, ladder.elapsed_s, ladder.revisions, ladder.peak_mem_mb, ""
+
+    # ── analysis phase: 데이터 변경 없이 인사이트만 생산 ──────────────────────
+    def _run_analysis(
+        self, phase: Phase, df: pd.DataFrame, goal: str, insights: list[str], case: CaseFolder
+    ):
+        profile_text = profile_to_prompt(profile_dataframe(df))
+        user = (
+            f"## Phase\n{phase.name}: {phase.objective}\n\n"
+            f"## Goal\n{goal}\n\n## Data profile\n{profile_text}"
+        )
+        if insights:
+            user += "\n\n## Prior findings\n" + "\n".join(insights)
+        text = self.llm.chat(_ANALYSIS_SYSTEM, user).strip()
+        insights.append(f"### {phase.name}\n{text[:1500]}")
+        case.save_text(f"analysis-{phase.name}.md", text)
+        case.record("analysis", {"phase": phase.name, "chars": len(text)})
 
     def _result(self, ok: bool, message: str, case: CaseFolder, **kw) -> PipelineResult:
         res = PipelineResult(

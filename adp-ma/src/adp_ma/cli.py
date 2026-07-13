@@ -18,9 +18,15 @@ def run(
     input: Path = typer.Option(..., "--input", "-i", exists=True, help="입력 데이터 (csv/parquet/json)"),
     goal: str = typer.Option(..., "--goal", "-g", help="자연어 처리 목표"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="출력 경로 (기본: runs/<id>/output.csv)"),
+    workflow: Optional[str] = typer.Option(
+        None, "--workflow", "-w", help="dynamic(기본) | kaggle(고정 6-phase)"
+    ),
 ):
     """자연어 목표로 데이터 파이프라인을 자율 구성·실행한다."""
-    settings = Settings()
+    settings = Settings(**({"workflow": workflow} if workflow else {}))
+    if settings.workflow not in ("dynamic", "kaggle"):
+        console.print(f"[red]알 수 없는 workflow: {settings.workflow} (dynamic|kaggle)[/red]")
+        raise typer.Exit(2)
     if not settings.groq_api_key:
         console.print("[red]GROQ_API_KEY가 없습니다 — .env 또는 환경변수로 설정하세요[/red]")
         raise typer.Exit(2)

@@ -30,6 +30,8 @@ class Phase(BaseModel):
     name: str
     objective: str
     rationale: str = ""
+    # transform(기본) | analysis(인사이트만 생산) | skip(미구현 단계) — workflows.py 참고
+    kind: str = "transform"
 
 
 class Orchestrator:

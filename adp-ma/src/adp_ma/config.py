@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     # LLM — Groq (OpenAI 호환 API)
     groq_base_url: str = "https://api.groq.com/openai/v1"
     groq_api_key: str = ""
-    groq_model: str = "llama-3.1-8b-instant"
+    groq_model: str = "llama-3.3-70b-versatile"  # 인프라 ConfigMap 기본값과 동일 (벤치마크 근거)
     llm_temperature: float = 0.2
 
     # 백트래킹·수정 한도 (논문 기본값: refine 3/레벨, phase 2, plan 3)
@@ -23,6 +23,12 @@ class Settings(BaseSettings):
 
     # 실행 감사 추적(case folder) 저장 위치
     runs_dir: str = "runs"
+
+    # ── 워크플로 (AutoKaggle M1) ─────────────────────────────────────────
+    # dynamic: Orchestrator가 phase를 동적 계획 / kaggle: 고정 6-phase 스켈레톤
+    workflow: str = "dynamic"
+    # 도구 우선 실행 (ML tools library) — 끄면 항상 codegen
+    tools_enabled: bool = True
 
     # ── ground agent 실행 방식 ───────────────────────────────────────────
     # local: 인프로세스 샌드박스 / k8s: adp-ma-workers ns의 Job (프로세스 격리)

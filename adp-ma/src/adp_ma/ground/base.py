@@ -24,5 +24,7 @@ class GroundAgentSpec(BaseModel):
     # 백트래킹 시 Architect가 주입하는 수정 지침
     hints: str = ""
     contract: SchemaContract = Field(default_factory=SchemaContract)
+    # 도구 우선 경로: [{"tool": name, "params": {...}}] — 비어 있으면 codegen 경로
+    tool_plan: list[dict] = Field(default_factory=list)
     # 생성된 코드: `def run(df: pd.DataFrame) -> pd.DataFrame` 를 정의해야 한다
     code: str = ""

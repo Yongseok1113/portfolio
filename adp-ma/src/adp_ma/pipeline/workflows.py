@@ -4,6 +4,7 @@ dynamic 워크플로(Orchestrator가 phase를 계획)와 달리, kaggle 워크�
 6-phase 뼈대를 고정하고 phase 내부의 태스크 분해(≤4)만 LLM에 맡긴다.
 
 phase.kind:
+  reader    — Reader가 과제 문서·프로파일로 task brief 생성 (M2)
   analysis  — 데이터를 바꾸지 않고 LLM이 인사이트만 생산 (이후 phase의 컨텍스트)
   transform — 기존 실행 경로 (expand → tool plan/codegen → 검증)
   skip      — 아직 미구현 단계 (기록만 남기고 통과)
@@ -18,12 +19,9 @@ def kaggle_phases(goal: str) -> list[Phase]:
     return [
         Phase(
             name="background_understanding",
-            kind="analysis",
-            objective=(
-                "Summarize the task: restate the goal in one paragraph, describe what the "
-                "data appears to contain, and state what the final output must look like."
-            ),
-            rationale="모든 후속 phase가 공유할 과제 이해 (M2에서 Reader가 문서 입력까지 확장)",
+            kind="reader",
+            objective="과제 문서·데이터 프로파일로 task brief 생성 — 전 phase 공통 컨텍스트",
+            rationale="모든 후속 phase가 공유할 과제 이해 (Reader 메타-에이전트)",
         ),
         Phase(
             name="preliminary_eda",

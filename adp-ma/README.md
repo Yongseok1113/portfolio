@@ -84,12 +84,12 @@ EXECUTOR=k8s MINIO_ENDPOINT=http://127.0.0.1:9000 \
 - worker 파드는 실행 성패를 `status.json`으로 전달하고 항상 정상 종료
 - 코드 변경 시 이미지 재빌드 필요: `minikube -p portfolio image build -t adp-ma:0.1.0 adp-ma/`
 
-## AutoKaggle 워크플로 (M1)
+## AutoKaggle 워크플로 (M1·M2)
 
-[설계 문서](docs/autokaggle-design.md)의 M1 구현 — **ML tools library + 고정 6-phase 워크플로**.
+[설계 문서](docs/autokaggle-design.md)의 M1(tools library + 6-phase) + M2(Reader·Summarizer) 구현.
 
 ```bash
-uv run adp-ma run --workflow kaggle -i data.csv -g "..."
+uv run adp-ma run --workflow kaggle -i data.csv -g "..." [--task-doc task.md]
 ```
 
 - 6-phase 스켈레톤: 배경이해 → 예비 EDA → 클리닝 → 심층 EDA → Feature Engineering → 모델링(M3 예정)
@@ -100,6 +100,10 @@ uv run adp-ma run --workflow kaggle -i data.csv -g "..."
 - E2E 검증(70b): 6-phase 완주 — 클리닝 4개 에이전트 중 3개가 도구로 처리, 나머지는 폴백으로 codegen
 - 교훈이 된 버그: `convert_dtypes`가 `"$1,234.56"`을 전부 NaN→0으로 만드는 값 파괴 →
   `parse_numeric` 도구 추가 + tool plan 프롬프트에 "안 맞으면 [] 반환" 명시로 해결
+- **Reader** (M2): `--task-doc` 과제 문서 + 프로파일 → 구조화 task brief(`brief.md`) — 전 phase 공통 컨텍스트
+- **Summarizer** (M2): transform phase 종료마다 실행 이벤트를 압축(`report-<phase>.md`) —
+  이후 phase가 "앞에서 무엇을 했는지" 알게 되고, 원시 로그 대신 요약만 컨텍스트에 주입해 토큰 절감
+- 실행 종료 시 `report.md` 자동 조립: goal + brief + phase별 요약 + 결과 (사람이 읽는 실행 보고서)
 
 ## 품질 벤치마크
 
@@ -128,6 +132,6 @@ uv run python examples/benchmark.py --model llama-3.3-70b-versatile --runs 3
 
 ## 로드맵
 
-- **M2**: Reader(대회 문서 이해) + Summarizer(phase report) / **M3**: 모델링 phase + submission + VS/CS / **M4**: 단위 테스트 게이트 + HITL
+- **M3**: 모델링 phase + submission + VS/CS 평가 / **M4**: 단위 테스트 게이트 + HITL
 - case folder MinIO 이전, 실행 큐 Valkey, in-cluster controller 배포(RBAC은 준비됨)
 - 병렬 dispatch (autonomous/hybrid), 비용 추적

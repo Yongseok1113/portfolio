@@ -21,6 +21,9 @@ def run(
     workflow: Optional[str] = typer.Option(
         None, "--workflow", "-w", help="dynamic(기본) | kaggle(고정 6-phase)"
     ),
+    task_doc: Optional[Path] = typer.Option(
+        None, "--task-doc", exists=True, help="과제 문서(markdown) — Reader가 task brief 생성에 사용"
+    ),
 ):
     """자연어 목표로 데이터 파이프라인을 자율 구성·실행한다."""
     settings = Settings(**({"workflow": workflow} if workflow else {}))
@@ -35,7 +38,7 @@ def run(
 
     console.print(f"[cyan]goal[/cyan]: {goal}")
     console.print(f"[cyan]input[/cyan]: {input}")
-    result = PipelineRunner(settings).run(input, goal, output)
+    result = PipelineRunner(settings).run(input, goal, output, task_doc=task_doc)
 
     style = "green" if result.ok else "red"
     console.print(f"\n[{style}]{'성공' if result.ok else '실패'}[/{style}]: {result.message}")

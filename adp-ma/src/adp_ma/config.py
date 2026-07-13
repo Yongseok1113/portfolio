@@ -13,7 +13,9 @@ class Settings(BaseSettings):
     # LLM — Groq (OpenAI 호환 API)
     groq_base_url: str = "https://api.groq.com/openai/v1"
     groq_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"  # 인프라 ConfigMap 기본값과 동일 (벤치마크 근거)
+    # 로컬 개발 기본값 — TPD 쿼터가 70b와 분리되고 벤치마크 pass(합계오차 0.0%, schema_exact)
+    # 클러스터에서는 infra-endpoints ConfigMap의 GROQ_MODEL(70b) env가 이 기본값을 덮어쓴다
+    groq_model: str = "openai/gpt-oss-20b"
     llm_temperature: float = 0.2
 
     # 백트래킹·수정 한도 (논문 기본값: refine 3/레벨, phase 2, plan 3)

@@ -69,6 +69,8 @@ class PipelineResult(BaseModel):
     submission_path: str | None = None
     best_model: str = ""
     cv_score: float | None = None
+    # ③ — case folder MinIO 아카이빙 위치 (archive_to_minio 시)
+    archived_to: str | None = None
 
 
 class PipelineRunner:
@@ -118,7 +120,7 @@ class PipelineRunner:
         self._guard = ""
         self._execute = self._make_executor(case.run_id)
         case.record("executor", {"mode": self.settings.executor})
-        df = _read_table(Path(input_path))
+        df = _read_table(self._resolve_input(input_path, case))
 
         # ── M3: test 데이터 제공 시 train+test 결합 파이프라인 + 모델링 활성 ──
         if test_data is not None:
@@ -527,7 +529,46 @@ class PipelineRunner:
             llm_calls=self.llm.calls, total_tokens=self.llm.total_tokens, **kw,
         )
         case.save_json("result.json", res.model_dump())
+        # result.json까지 저장한 뒤 아카이빙해야 MinIO 사본이 완전하다
+        res.archived_to = self._archive_case(case)
         return res
+
+    # ── minio:// 입력 URI 해석 (③) ───────────────────────────────────────────
+    def _resolve_input(self, input_path, case: CaseFolder) -> Path:
+        """minio://bucket/key 는 임시 파일로 내려받고, 그 외는 로컬 경로 그대로."""
+        s = str(input_path)
+        if not s.startswith("minio://"):
+            return Path(input_path)
+        from adp_ma.state.storage import ArtifactStore, parse_minio_uri
+
+        bucket, key = parse_minio_uri(s)
+        store = ArtifactStore.from_settings(self.settings)
+        if bucket != store.bucket:
+            store.bucket = bucket
+        local = case.dir / "input" / Path(key).name
+        store.download_file(key, local)
+        case.record("input_download", {"uri": s, "local": str(local)})
+        return local
+
+    # ── case folder → MinIO 아카이빙 (③) ─────────────────────────────────────
+    def _archive_case(self, case: CaseFolder) -> str | None:
+        """settings.archive_to_minio 시 case folder를 MinIO runs/<id>/로 업로드.
+
+        아카이빙 실패는 실행 결과에 영향 주지 않는다 (부가 기능) — 경고만 기록.
+        """
+        if not self.settings.archive_to_minio:
+            return None
+        try:
+            from adp_ma.state.storage import ArtifactStore
+
+            store = ArtifactStore.from_settings(self.settings)
+            prefix = f"runs/{case.run_id}"
+            n = store.upload_dir(case.dir, prefix)
+            case.record("archive", {"prefix": prefix, "files": n})
+            return f"minio://{self.settings.minio_bucket}/{prefix}"
+        except Exception as e:  # noqa: BLE001 — 아카이빙 실패는 치명적이지 않음
+            case.record("archive_failed", {"error": str(e)[:200]})
+            return None
 
 
 def _read_table(path: Path) -> pd.DataFrame:

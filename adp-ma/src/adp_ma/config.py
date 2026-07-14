@@ -51,3 +51,5 @@ class Settings(BaseSettings):
     minio_root_user: str = ""
     minio_root_password: str = ""
     minio_bucket: str = "adp-ma"
+    # 실행 종료 시 case folder를 MinIO(runs/<run-id>/)로 업로드 — 실행 결과 영속화
+    archive_to_minio: bool = False

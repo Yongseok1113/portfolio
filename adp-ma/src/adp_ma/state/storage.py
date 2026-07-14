@@ -77,3 +77,38 @@ class ArtifactStore:
 
     def get_json(self, key: str):
         return json.loads(self.get_bytes(key))
+
+    # ── 디렉토리 아카이빙 (case folder → MinIO) ──────────────────────────────
+    def upload_dir(self, local_dir, key_prefix: str) -> int:
+        """local_dir의 모든 파일을 key_prefix/ 아래로 업로드. 업로드한 파일 수 반환."""
+        from pathlib import Path
+
+        base = Path(local_dir)
+        count = 0
+        for path in sorted(base.rglob("*")):
+            if path.is_file():
+                rel = path.relative_to(base).as_posix()
+                self.put_bytes(f"{key_prefix}/{rel}", path.read_bytes())
+                count += 1
+        return count
+
+    def download_file(self, key: str, local_path) -> None:
+        from pathlib import Path
+
+        dest = Path(local_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(self.get_bytes(key))
+
+    def list_prefix(self, prefix: str) -> list[str]:
+        return [obj.object_name for obj in self._client.list_objects(self.bucket, prefix, recursive=True)]
+
+
+def parse_minio_uri(uri: str) -> tuple[str, str]:
+    """minio://bucket/key/path → (bucket, key). 접두사 없으면 ValueError."""
+    if not uri.startswith("minio://"):
+        raise ValueError(f"minio:// URI가 아님: {uri}")
+    rest = uri[len("minio://"):]
+    if "/" not in rest:
+        raise ValueError(f"minio URI에 key가 없음: {uri}")
+    bucket, key = rest.split("/", 1)
+    return bucket, key

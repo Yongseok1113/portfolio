@@ -1,5 +1,7 @@
 """M4 — 단위 테스트 게이트·HITL 결정적 테스트 (LLM 불필요)."""
 
+from pathlib import Path
+
 import pandas as pd
 
 from adp_ma.ground import GroundAgentSpec, run_ladder
@@ -61,6 +63,29 @@ def test_gate_failure_triggers_refine():
     result = run_ladder(spec, df, refine=refine, gate=gate)
     assert result.ok
     assert refines and "단위 테스트 실패" in refines[0]
+
+
+# ── 예외 안전: 예상 밖 오류에도 결과·감사 추적이 남는다 ──────────────────────
+def test_unexpected_error_still_produces_result(tmp_path):
+    from adp_ma.config import Settings
+    from adp_ma.pipeline import PipelineRunner
+
+    data = tmp_path / "d.csv"
+    pd.DataFrame({"a": [1, 2]}).to_csv(data, index=False)
+
+    settings = Settings(workflow="kaggle", groq_api_key="dummy", runs_dir=str(tmp_path / "runs"))
+    runner = PipelineRunner(settings)
+
+    def boom(*a, **k):
+        raise RuntimeError("LLM 429 같은 예상 밖 오류")
+
+    runner.reader.brief = boom  # 첫 LLM 접점에서 폭발시킴
+
+    result = runner.run(data, "goal")
+    assert not result.ok
+    assert "실행 오류" in result.message and "RuntimeError" in result.message
+    # 크래시 대신 result.json까지 저장됨 (아카이브 경로도 이 지점을 지남)
+    assert (tmp_path / "runs" / Path(result.run_dir).name / "result.json").exists()
 
 
 # ── HITL: 계획 반려 시 LLM 실행 없이 중단 ────────────────────────────────────

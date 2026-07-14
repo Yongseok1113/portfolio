@@ -52,9 +52,10 @@ spec:
             - name: GROQ_MODEL
               valueFrom:
                 configMapKeyRef: { name: infra-endpoints, key: GROQ_MODEL }
+            # groq-secret 키도 케밥케이스(api-key) — minio-secret과 동일 컨벤션
             - name: GROQ_API_KEY
               valueFrom:
-                secretKeyRef: { name: groq-secret, key: GROQ_API_KEY }
+                secretKeyRef: { name: groq-secret, key: api-key }
           resources:
             requests: { cpu: 200m, memory: 512Mi }
             limits: { cpu: "1", memory: 1Gi }

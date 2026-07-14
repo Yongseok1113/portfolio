@@ -110,7 +110,37 @@ class PipelineRunner:
         sample_submission: str | Path | None = None,
         target: str | None = None,
     ) -> PipelineResult:
+        """예외 안전 진입점 — 예상 밖 오류(LLM 429, 네트워크 등)에도
+        감사 추적과 MinIO 아카이브가 반드시 남는다."""
         case = CaseFolder(self.settings.runs_dir)
+        try:
+            return self._run_inner(
+                case, input_path, goal, output_path, task_doc,
+                test_data, sample_submission, target,
+            )
+        except Exception as e:  # noqa: BLE001 — 최후 방어선: 결과·아카이브 보존
+            import traceback
+
+            case.record(
+                "fatal",
+                {"error": f"{type(e).__name__}: {str(e)[:800]}",
+                 "trace": traceback.format_exc(limit=6)[-1500:]},
+            )
+            return self._result(
+                False, f"실행 오류: {type(e).__name__}: {str(e)[:300]}", case
+            )
+
+    def _run_inner(
+        self,
+        case: CaseFolder,
+        input_path: str | Path,
+        goal: str,
+        output_path: str | Path | None = None,
+        task_doc: str | Path | None = None,
+        test_data: str | Path | None = None,
+        sample_submission: str | Path | None = None,
+        target: str | None = None,
+    ) -> PipelineResult:
         self._task_doc = Path(task_doc).read_text(encoding="utf-8") if task_doc else ""
         self._brief = ""
         self._report_sections = []

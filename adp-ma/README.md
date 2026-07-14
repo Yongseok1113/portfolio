@@ -127,6 +127,29 @@ VS(제출 유효성) + ANPS(accuracy) → **CS = 0.5·VS + 0.5·ANPS** 채점.
 2026-07-13, gpt-oss-20b: **VS 1.0 / accuracy 0.865 (다수결 기준선 0.805 초과) / CS 0.9325**
 — best: logistic_regression (CV 3모델 비교), 23 LLM calls.
 
+### 품질 게이트 A/B 실험 (M4 단위 테스트 게이트의 효과)
+
+같은 churn 과제·모델(gpt-oss-20b)에서 `UNIT_TESTS_ENABLED` 두 팔 비교:
+
+| 팔 | accuracy | CS | LLM calls | 게이트가 잡은 버그 |
+|---|---|---|---|---|
+| 게이트 OFF | 0.875 | 0.9375 | 23 | — |
+| 게이트 ON | 0.865 | 0.9325 | 18 | 0 (생성된 테스트 2개 모두 `gate_disabled`) |
+
+- **정직한 결론**: 이 과제에서 게이트는 품질 이득이 없었다. 20b가 생성한 단위 테스트가
+  오히려 결함이라 안전장치(`gate_disabled`)가 2건 모두 발동 — 게이트가 유효하게 잡은 버그는 0건
+- 즉 게이트의 가치는 **강한 모델 + 계약이 못 잡는 논리 버그가 있는 과제**에서 드러나며,
+  약한 모델에서는 안전장치가 무해화하는 것이 관측됨. 1회 실행이라 정확도 차(0.01)는 노이즈 범위
+- 게이트의 "안전장치가 결함 테스트를 무력화한다"는 설계 의도 자체는 실전에서 정확히 동작함
+
+### 실제 데이터셋 (Titanic)
+
+`examples/benchmark_titanic.py` — 공개 미러에서 Titanic을 받아 train 700/test 191로 분할, VS/CS 채점.
+실행 중 **실전 버그 발견·수정**: FE 단계가 중복 컬럼명을 만들면 계약 검증기의 `df[col]`이
+Series가 아닌 DataFrame이 되어 크래시 → 중복 컬럼을 critical 위반으로 잡아 refine이 고치도록 수정
+([schema_contract.py](src/adp_ma/contracts/schema_contract.py)). 수정 후 클리닝 완주·FE 진입 확인.
+(전체 완주 벤치마크 수치는 Groq 무료티어 일일 토큰 한도 리셋 후 기록 예정)
+
 ## 품질 벤치마크
 
 `examples/benchmark.py` — 고정 데이터·목표에 대해 산출물을 **결정적 정답**(pandas 직접 계산)과 비교 채점한다.

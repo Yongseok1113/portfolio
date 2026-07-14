@@ -56,6 +56,27 @@ def test_value_constraint_range_and_nulls():
     assert len(result.critical) == 2  # 음수 + null
 
 
+def test_duplicate_output_columns_are_critical_not_crash():
+    # 중복 컬럼명(FE가 같은 이름 컬럼 생성)은 df[col]이 DataFrame이 되어
+    # 예전엔 크래시했음 — 이제 critical 위반으로 잡아 refine이 고치게 함
+    contract = SchemaContract(
+        required_input_columns={"a": "int"},
+        value_constraints=[ValueConstraint(column="dup", min_value=0)],
+    )
+    df_in = pd.DataFrame({"a": [1, 2]})
+    df_out = pd.DataFrame([[1, 5, 9], [2, 6, 10]], columns=["a", "dup", "dup"])
+    result = verify_contract(contract, df_in, df_out)  # 크래시하지 않아야
+    assert not result.ok
+    assert any("중복 컬럼명" in viol.message for viol in result.critical)
+
+
+def test_duplicate_input_columns_do_not_crash():
+    contract = SchemaContract(required_input_columns={"x": "int"})
+    df_in = pd.DataFrame([[1, 2], [3, 4]], columns=["x", "x"])
+    result = verify_contract(contract, df_in, pd.DataFrame({"y": [1]}))
+    assert isinstance(result.ok, bool)  # dtype 판정 크래시 없이 완료
+
+
 def test_sanitize_drops_hallucinated_input_requirements():
     from adp_ma.contracts import sanitize_contract
 

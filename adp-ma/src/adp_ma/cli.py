@@ -15,7 +15,7 @@ console = Console()
 
 @app.command()
 def run(
-    input: Path = typer.Option(..., "--input", "-i", exists=True, help="입력 데이터 (csv/parquet/json)"),
+    input: str = typer.Option(..., "--input", "-i", help="입력 데이터 (로컬 경로 또는 minio://bucket/key)"),
     goal: str = typer.Option(..., "--goal", "-g", help="자연어 처리 목표"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="출력 경로 (기본: runs/<id>/output.csv)"),
     workflow: Optional[str] = typer.Option(
@@ -36,9 +36,17 @@ def run(
     interactive: bool = typer.Option(
         False, "--interactive", help="HITL: 계획 확정 후 실행 전에 승인 요청"
     ),
+    archive: bool = typer.Option(
+        False, "--archive", help="실행 종료 후 case folder를 MinIO(runs/<id>/)로 업로드"
+    ),
 ):
     """자연어 목표로 데이터 파이프라인을 자율 구성·실행한다."""
-    settings = Settings(**({"workflow": workflow} if workflow else {}))
+    overrides = {}
+    if workflow:
+        overrides["workflow"] = workflow
+    if archive:
+        overrides["archive_to_minio"] = True
+    settings = Settings(**overrides)
     if settings.workflow not in ("dynamic", "kaggle"):
         console.print(f"[red]알 수 없는 workflow: {settings.workflow} (dynamic|kaggle)[/red]")
         raise typer.Exit(2)
@@ -80,6 +88,8 @@ def run(
             f"submission: {result.submission_path} "
             f"(best={result.best_model}, cv={result.cv_score})"
         )
+    if result.archived_to:
+        console.print(f"아카이브: {result.archived_to}")
     raise typer.Exit(0 if result.ok else 1)
 
 

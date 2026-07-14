@@ -38,11 +38,22 @@ class K8sJobExecutor:
         self.store.put_text(f"{prefix}/code.py", code)
         self.store.put_df(f"{prefix}/input.parquet", df)
 
-        self._batch.create_namespaced_job(
-            namespace=self.settings.worker_namespace, body=self._job_manifest(job_name, prefix)
-        )
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            self._batch.create_namespaced_job(
+                namespace=self.settings.worker_namespace,
+                body=self._job_manifest(job_name, prefix),
+            )
+        except ApiException as e:
+            return SandboxResult(
+                ok=False, error=f"Job 생성 실패 ({e.status} {e.reason}): {str(e.body)[:300]}"
+            )
         try:
             infra_error = self._wait(job_name)
+        except ApiException as e:
+            # 어떤 K8s API가 거부됐는지 스스로 설명 (RBAC 디버깅용)
+            infra_error = f"Job 상태 조회 실패 ({e.status} {e.reason}): {str(e.body)[:300]}"
         finally:
             self._cleanup(job_name)
 

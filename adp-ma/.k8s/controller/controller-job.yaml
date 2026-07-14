@@ -1,0 +1,61 @@
+# in-cluster controller (③) — 파이프라인 전체를 클러스터 안에서 Job으로 실행.
+# adp-ma-system ns, adp-ma-controller SA(controller-rbac.yaml)로 ground agent Job을
+# adp-ma-workers에 생성한다. 입력은 MinIO, case folder도 MinIO로 아카이브.
+#
+# 사용: <INPUT_URI>·<GOAL>를 치환해 apply.
+#   sed 's|<INPUT_URI>|minio://adp-ma/inputs/sales_raw.csv|; s|<GOAL>|...|' \
+#     controller-job.yaml | kubectl apply -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: adp-ma-controller-
+  namespace: adp-ma-system
+  labels:
+    app: adp-ma
+    role: controller
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 1800
+  template:
+    metadata:
+      labels:
+        app: adp-ma
+        role: controller
+    spec:
+      serviceAccountName: adp-ma-controller
+      restartPolicy: Never
+      containers:
+        - name: controller
+          image: adp-ma:0.1.0
+          imagePullPolicy: IfNotPresent
+          args: ["run", "-i", "<INPUT_URI>", "-g", "<GOAL>", "--archive"]
+          env:
+            # ground agent도 클러스터 안에서 Job으로 격리 실행
+            - name: EXECUTOR
+              value: "k8s"
+            - name: ARCHIVE_TO_MINIO
+              value: "true"
+            - name: MINIO_ENDPOINT
+              value: "http://minio.portfolio-infra.svc.cluster.local:9000"
+            - name: MINIO_BUCKET
+              value: "adp-ma"
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef: { name: minio-secret, key: root-user }
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: minio-secret, key: root-password }
+            # LLM — 루트 공유 인프라 (ConfigMap 주소 + Secret 키)
+            - name: GROQ_BASE_URL
+              valueFrom:
+                configMapKeyRef: { name: infra-endpoints, key: GROQ_BASE_URL }
+            - name: GROQ_MODEL
+              valueFrom:
+                configMapKeyRef: { name: infra-endpoints, key: GROQ_MODEL }
+            # groq-secret 키도 케밥케이스(api-key) — minio-secret과 동일 컨벤션
+            - name: GROQ_API_KEY
+              valueFrom:
+                secretKeyRef: { name: groq-secret, key: api-key }
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { cpu: "1", memory: 1Gi }

@@ -4,3 +4,4 @@ __pycache__/
 .pytest_cache/
 examples/*.csv
 examples/kaggle/
+examples/kaggle_dl/

@@ -113,5 +113,59 @@ def profile(
     console.print_json(json.dumps(prof, ensure_ascii=False))
 
 
+@app.command()
+def kaggle(
+    competition: str = typer.Option(..., "--competition", "-c", help="대회 slug (예: titanic)"),
+    goal: str = typer.Option(..., "--goal", "-g", help="자연어 처리 목표"),
+    data_dir: Path = typer.Option(Path("examples/kaggle_dl"), "--data-dir", help="다운로드 위치"),
+    target: Optional[str] = typer.Option(None, "--target", help="target 컬럼명"),
+    submit: bool = typer.Option(
+        False, "--submit", help="[외부 공개] 채점 후 대회에 실제 제출 (확인 프롬프트)"
+    ),
+    yes: bool = typer.Option(False, "--yes", help="제출 확인 프롬프트 자동 승인 (자동화용)"),
+):
+    """Kaggle 대회 데이터 다운로드 → 파이프라인 → submission 생성 → (선택) 제출."""
+    from adp_ma import kaggle_io
+    from adp_ma.pipeline import PipelineRunner
+
+    settings = Settings(workflow="kaggle")
+    if not settings.groq_api_key:
+        console.print("[red]GROQ_API_KEY가 없습니다[/red]")
+        raise typer.Exit(2)
+
+    console.print(f"[cyan]대회[/cyan]: {competition}  [cyan]인증 계정[/cyan]: {kaggle_io.whoami()}")
+    files = kaggle_io.download_competition(competition, data_dir)
+    if not (files["train"] and files["test"] and files["sample_submission"]):
+        console.print(f"[red]필수 파일 누락[/red]: {files}")
+        raise typer.Exit(1)
+
+    result = PipelineRunner(settings).run(
+        files["train"], goal,
+        test_data=files["test"], sample_submission=files["sample_submission"], target=target,
+    )
+    style = "green" if result.ok else "red"
+    console.print(f"\n[{style}]{'성공' if result.ok else '실패'}[/{style}]: {result.message}")
+    if not result.ok or not result.submission_path:
+        raise typer.Exit(1)
+    console.print(f"submission: {result.submission_path} (best={result.best_model}, cv={result.cv_score})")
+
+    if not submit:
+        console.print("[yellow]제출 생략[/yellow] — 실제 제출하려면 --submit")
+        raise typer.Exit(0)
+
+    # 외부 공개 동작 — 계정·대회 명시 후 확인
+    account = kaggle_io.whoami()
+    console.print(f"\n[bold red]대회 '{competition}' 에 계정 '{account}' 로 제출합니다.[/bold red]")
+    if not yes and not typer.confirm("제출할까요?", default=False):
+        console.print("제출 취소")
+        raise typer.Exit(0)
+
+    sub = kaggle_io.submit(competition, result.submission_path, f"adp-ma {result.best_model}")
+    console.print(f"[{'green' if sub.ok else 'red'}]{sub.message}[/] (계정 {sub.account})")
+    if sub.ok:
+        console.print(f"public score: {kaggle_io.latest_score(competition) or '채점 대기'}")
+    raise typer.Exit(0 if sub.ok else 1)
+
+
 if __name__ == "__main__":
     app()

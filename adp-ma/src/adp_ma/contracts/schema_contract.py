@@ -73,6 +73,8 @@ def _dtype_ok(declared: str, s: pd.Series) -> bool:
     kinds = _DTYPE_KINDS.get(declared.lower())
     if kinds is None:  # "any" 또는 미지의 선언은 통과
         return True
+    if not isinstance(s, pd.Series):  # 중복 컬럼명 → DataFrame 반환. dtype 판정 생략
+        return True
     return s.dtype.kind in kinds
 
 
@@ -102,6 +104,12 @@ def verify_contract(
     def warning(message: str, column: str | None = None):
         v.append(Violation(severity="warning", column=column, message=message))
 
+    # 중복 컬럼명은 다운스트림(모델링·인코딩)을 깨는 데이터 품질 결함 →
+    # critical로 처리해 refine 루프가 고치게 한다 (df[col]이 DataFrame이 되는 문제도 예방)
+    dup_out = df_out.columns[df_out.columns.duplicated()].unique().tolist()
+    if dup_out:
+        critical(f"출력에 중복 컬럼명 존재: {dup_out} — 각 컬럼명은 고유해야 함")
+
     for col, dt in contract.required_input_columns.items():
         if col not in df_in.columns:
             critical(f"필수 입력 컬럼 '{col}' 없음", col)
@@ -127,6 +135,8 @@ def verify_contract(
             critical(f"값 제약 대상 컬럼 '{c.column}' 없음", c.column)
             continue
         s = df_out[c.column]
+        if not isinstance(s, pd.Series):  # 중복 컬럼 — 위에서 이미 critical 처리됨
+            continue
         if c.no_nulls and bool(s.isna().any()):
             critical(f"'{c.column}' 에 null 존재 (no_nulls 위반)", c.column)
         nn = s.dropna()

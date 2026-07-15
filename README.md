@@ -44,11 +44,11 @@ portfolio/
 │   ├── scripts/               ← cluster-up/down/clean/status, create-secrets
 │   └── .env                   ← 비밀값 (gitignore)
 │
-├── adp-ma/                    ← [구현 완료] 메타-에이전트 자율 데이터 파이프라인
-│   ├── src/adp_ma/            ← Orchestrator·Architect·Monitor + 파이프라인
-│   ├── .k8s/                  ← ground agent를 K8s Job으로 실행 (프로세스 격리)
-│   ├── examples/              ← 데모 데이터 · 채점형 벤치마크
-│   ├── tests/                 ← LLM 불필요 결정적 테스트
+├── adp-ma/                    ← [성숙] 메타-에이전트 자율 데이터 파이프라인 + AutoKaggle + Kaggle 연동
+│   ├── src/adp_ma/            ← 메타-에이전트, 파이프라인, tools library, 모델링, kaggle_io
+│   ├── .k8s/                  ← ground agent Job(프로세스 격리) + in-cluster controller
+│   ├── examples/              ← 데모 데이터 · 채점형 벤치마크(합성·Titanic·모델링)
+│   ├── tests/                 ← LLM 불필요 결정적 테스트 (72개)
 │   └── docs/                  ← AutoKaggle 업그레이드 설계
 │
 ├── aquarium/                  ← [초기] 멀티 에이전트 시스템 (스캐폴드)
@@ -65,7 +65,7 @@ portfolio/
 | 영역 | 상태 | 요약 |
 |---|---|---|
 | **공유 인프라** (`.k8s/`) | ✅ 운영 | Valkey·PostgreSQL·MinIO 프로비저닝 완료, Groq LLM 전환, 운영 스크립트 일습 |
-| **adp-ma** | ✅ MVP + 확장 | 논문 모사 파이프라인 구현, K8s Job 격리·품질 벤치마크·차기 설계까지 완료 |
+| **adp-ma** | ✅ 성숙 | 논문 모사 파이프라인 + AutoKaggle 업그레이드(M1~M4) + Kaggle 연동 + in-cluster controller |
 | **aquarium** | 🟡 스캐폴드 | uv 프로젝트 뼈대만 존재, 구현 예정 |
 
 ### 공유 인프라 (`.k8s/`)
@@ -92,9 +92,12 @@ cd .k8s/scripts
 - **메타-에이전트 3종**: Orchestrator(계획·자기비평) / Architect(에이전트 확장·코드 생성) / Monitor(규칙 기반 감시)
 - **Progressive sampling** (XS→S→M→FULL) + **스키마 계약** 검증 + **2단계 백트래킹**(phase/plan)
 - **K8s Job 프로세스 격리**: ground agent 1회 실행 = `adp-ma-workers` ns의 Job 1개, MinIO로 데이터 교환
-- **case folder** 감사 추적: 계획·생성 코드·결정 로그를 실행별로 보존
+- **case folder** 감사 추적: 계획·생성 코드·결정 로그를 실행별로 보존 (`--archive`로 MinIO 영속화)
 - **채점형 벤치마크**: 결정적 정답 대비 측정 → 70b 합계오차 0.0% pass / 8b는 계약 위반을 프레임워크가 정확히 거부
-- 차기: [AutoKaggle 업그레이드 설계](adp-ma/docs/autokaggle-design.md) (M1~M4 마일스톤)
+- **[AutoKaggle 업그레이드](adp-ma/docs/autokaggle-design.md) 완성** (M1~M4): ML tools library(도구 우선·codegen 폴백),
+  고정 6-phase 워크플로, Reader·Summarizer, 모델링·submission(VS/CS), 단위 테스트 게이트·HITL
+- **Kaggle 연동**: `adp-ma kaggle -c <slug> -g <goal>` — 대회 데이터 다운로드 → 파이프라인 → submission → (확인 후) 제출
+- **in-cluster controller**: 파이프라인 전체를 `adp-ma-system`의 Job으로 실행 (controller SA가 워커 Job 오케스트레이션)
 
 ### aquarium
 
@@ -134,5 +137,8 @@ uv run python examples/make_sample_data.py
 uv run adp-ma run -i examples/sales_raw.csv \
   -g "중복 제거, amount 정규화, region 표준화, 월별·지역별 매출 집계"
 
-uv run pytest    # LLM 없이 도는 결정적 테스트
+# 3. Kaggle 대회 (다운로드 → 파이프라인 → submission, --submit로 실제 제출)
+uv run adp-ma kaggle -c titanic -g "결측 보정·인코딩·파생 후 Survived 예측"
+
+uv run pytest    # LLM 없이 도는 결정적 테스트 (72개)
 ```

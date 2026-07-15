@@ -45,8 +45,11 @@ LLM 백엔드는 루트 공유 인프라의 결정(Groq API, OpenAI 호환)을 �
 | Case folder 감사 추적 | ✅ | `src/adp_ma/state/case_folder.py` |
 | 에이전트 라이브러리 재사용 | ✅ (인메모리) | `src/adp_ma/meta_agents/architect.py` |
 | 샌드박스 | 네임스페이스 격리 + **K8s Job 프로세스 격리** (`EXECUTOR=k8s`) | `src/adp_ma/ground/sandbox.py`, `k8s_executor.py` |
+| HITL 체크포인트 | ✅ (`--interactive`) | `src/adp_ma/pipeline/runner.py` |
 | 병렬 dispatch (autonomous/hybrid) | ⬜ centralized만 | 로드맵 |
-| 다중 소스 join, 비용 추적, HITL 체크포인트 | ⬜ | 로드맵 |
+| 다중 소스 join, 비용 추적 | ⬜ | 로드맵 |
+
+> AutoKaggle 업그레이드(M1~M4)와 Kaggle 연동은 아래 별도 섹션 참고.
 
 ## 사용법
 
@@ -84,6 +87,23 @@ EXECUTOR=k8s MINIO_ENDPOINT=http://127.0.0.1:9000 \
 - worker 파드는 실행 성패를 `status.json`으로 전달하고 항상 정상 종료
 - 코드 변경 시 이미지 재빌드 필요: `minikube -p portfolio image build -t adp-ma:0.1.0 adp-ma/`
 
+### case folder 아카이빙 + 입력 URI
+
+- `--archive`(또는 `ARCHIVE_TO_MINIO=true`): 실행 종료 시 case folder 전체를 `minio://adp-ma/runs/<run-id>/`로 업로드 — 파드가 사라진 뒤에도 감사 추적을 사후 복원 가능
+- `minio://bucket/key` 입력 URI: 컨트롤러 파드가 클러스터 안에서 데이터를 수급
+- `run()`은 예외 안전 — LLM 429 같은 예상 밖 오류에도 `fatal` 기록·`result.json`·아카이브가 반드시 남는다
+
+### in-cluster controller (파이프라인 전체를 클러스터 Job으로)
+
+```bash
+# 준비(setup.sh)가 adp-ma-system에 secret·configmap 복제 + controller RBAC 적용
+# 입력을 MinIO에 올린 뒤 (예: inputs/sales_raw.csv) 실행
+sed 's|<INPUT_URI>|minio://adp-ma/inputs/sales_raw.csv|; s|<GOAL>|...|' \
+  .k8s/controller/controller-job.yaml | kubectl create -f -
+```
+
+컨트롤러 Job(`adp-ma-system`)이 controller SA로 ground agent Job을 `adp-ma-workers`에 생성하고, 종료 시 case folder를 MinIO로 아카이브한다. 실검증: 워커 Job 15개+ 생성·정리, 429 시 우아한 종료 + 아카이브 확인.
+
 ## AutoKaggle 워크플로 (M1~M4 완료)
 
 [설계 문서](docs/autokaggle-design.md)의 전체 마일스톤 구현: M1(tools library + 6-phase),
@@ -94,7 +114,7 @@ uv run adp-ma run --workflow kaggle -i train.csv -g "..." \
   [--task-doc task.md] [--test-data test.csv --sample-submission sub.csv [--target y]]
 ```
 
-- 6-phase 스켈레톤: 배경이해 → 예비 EDA → 클리닝 → 심층 EDA → Feature Engineering → 모델링(M3 예정)
+- 6-phase 스켈레톤: 배경이해 → 예비 EDA → 클리닝 → 심층 EDA → Feature Engineering → 모델링
 - **analysis phase**는 데이터를 바꾸지 않고 인사이트만 생산해 이후 phase의 컨텍스트로 주입 (`runs/<id>/analysis-*.md`)
 - **도구 우선 실행**: 검증된 도구 16종(cleaning 8 · feature 8) 카탈로그에서 tool plan을 먼저 시도하고,
   계약 위반·실행 실패 시 codegen으로 폴백. 도구는 검증된 코드라 progressive sampling 없이 즉시 실행
@@ -150,6 +170,22 @@ Series가 아닌 DataFrame이 되어 크래시 → 중복 컬럼을 critical 위
 ([schema_contract.py](src/adp_ma/contracts/schema_contract.py)). 수정 후 클리닝 완주·FE 진입 확인.
 (전체 완주 벤치마크 수치는 Groq 무료티어 일일 토큰 한도 리셋 후 기록 예정)
 
+## Kaggle 연동
+
+실제 Kaggle 대회에 연결 — 데이터 다운로드 → 파이프라인 → submission 생성 → (선택) 제출·점수 회수.
+
+```bash
+# 인증: ~/.kaggle/kaggle.json 또는 KAGGLE_USERNAME/KAGGLE_KEY (kaggle 표준)
+adp-ma kaggle -c titanic -g "결측 보정, 범주형 인코딩, 호칭·가족규모 파생 후 Survived 예측"
+# → examples/kaggle_dl/titanic/ 다운로드 → submission.csv 생성 (제출 안 함)
+
+adp-ma kaggle -c titanic -g "..." --submit   # 계정·대회 확인 프롬프트 뒤 실제 제출 → public score
+```
+
+- `--submit`는 **외부 공개 동작** — 계정·대회를 화면에 표시하고 확인받은 뒤에만 제출 (기본은 파일만 생성)
+- 제출양식 파일명 변종 자동 탐지 (Titanic은 `gender_submission.csv`)
+- 실검증: 실제 Titanic 대회 다운로드(34.1k, 계정 인증 확인). 전체 완주·실제 제출은 쿼터 리셋 후
+
 ## 품질 벤치마크
 
 `examples/benchmark.py` — 고정 데이터·목표에 대해 산출물을 **결정적 정답**(pandas 직접 계산)과 비교 채점한다.
@@ -175,8 +211,10 @@ uv run python examples/benchmark.py --model llama-3.3-70b-versatile --runs 3
 - 프롬프트 규칙: 정제 단계는 행 보존(coerce), 집계 단계는 `.agg`(not `.transform`) —
   집계·중복제거처럼 행 감소가 계약된 단계는 Monitor의 행 소실 룰을 WARN으로 완화
 
-## 로드맵 (M1~M4 이후)
+## 로드맵
 
-- 품질 게이트 A/B 실험 (계약만 vs 계약+단위테스트) — Groq TPD 쿼터 확보 후
-- case folder MinIO 이전, 실행 큐 Valkey, in-cluster controller 배포(RBAC은 준비됨)
-- 병렬 dispatch (autonomous/hybrid), 비용 추적, 실제 Kaggle 데이터셋 평가
+완료: M1~M4, 게이트 A/B, case folder MinIO 아카이빙, in-cluster controller, Kaggle 연동.
+
+- 쿼터 리셋 후 전체 완주 벤치마크 기록 (Titanic VS/CS, controller 완주, 실제 Kaggle 제출 점수)
+- 실행 큐 Valkey, 병렬 dispatch (autonomous/hybrid), 비용 추적
+- 에이전트 라이브러리 영속화(현재 인메모리)

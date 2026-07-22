@@ -3,7 +3,8 @@
 [arXiv:2602.00307](https://arxiv.org/abs/2602.00307) *Autonomous Data Processing using Meta-Agents* 의 모사 구현.
 자연어 목표 하나로 데이터 처리 파이프라인을 자율 계획·구현·검증·복구한다.
 
-LLM 백엔드는 루트 공유 인프라의 결정(Groq API, OpenAI 호환)을 따른다.
+LLM 백엔드는 OpenAI 호환 엔드포인트면 무엇이든 된다 — 기본은 루트 공유 인프라의 Groq API,
+로컬 개발 시 Ollama 등으로 전환 가능 ([로컬 LLM](#로컬-llm-ollama) 참고).
 
 ## 아키텍처
 
@@ -66,6 +67,32 @@ uv run adp-ma run -i examples/sales_raw.csv \
 
 uv run pytest          # LLM 없이 도는 결정적 테스트 (contracts/monitor/sampling/sandbox)
 ```
+
+## 로컬 LLM (Ollama)
+
+Groq 무료티어의 일일 토큰 한도(TPD)를 피하려면 OpenAI 호환 로컬 서버로 전환한다.
+클라이언트가 이미 OpenAI 호환이라 **코드 변경 없이 환경변수만** 바꾸면 된다.
+
+```bash
+# 1) Ollama 설치 후 모델 준비 (예: 코드 생성 특화 7B — 6GB VRAM에 적합)
+ollama pull qwen2.5-coder:7b
+
+# 2) .env를 로컬로 전환 (헬퍼) — LLM_* 별칭이 GROQ_*를 덮어쓴다
+scripts/llm-profile.sh local              # 기본 qwen2.5-coder:7b
+scripts/llm-profile.sh local llama3.1:8b  # 다른 모델 지정
+scripts/llm-profile.sh groq               # Groq로 복귀 (LLM_* 제거, GROQ_* 보존)
+scripts/llm-profile.sh status
+
+uv run adp-ma run -i examples/sales_raw.csv -g "..."   # 이제 로컬 LLM으로 실행
+```
+
+- 환경변수: `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` (provider 중립 별칭).
+  값이 있으면 `GROQ_*`를 덮어쓰고, 없으면 `GROQ_*` 사용 — 클러스터 ConfigMap과 호환 유지
+- 로컬 서버는 키가 필요 없어도 되지만 OpenAI 클라이언트가 빈 키를 거부하므로 config가 더미(`local`)를 채움
+- **품질·속도 트레이드오프**: 7B는 70b보다 codegen이 약하다. 다만 (a) 도구 우선 경로는
+  JSON tool plan만 고르면 되어 7B도 무난하고, (b) 검증·모델링·Monitor는 결정적 코드라 무관하며,
+  (c) **쿼터가 없어 refine·백트래킹을 자유롭게** 돌릴 수 있고, (d) 데이터가 로컬을 벗어나지 않는다
+- 6GB VRAM엔 7B(Q4 ~4.7GB)+KV캐시가 다 안 들어가 일부(약 18%)가 CPU로 스필 → API보다 느림
 
 ## K8s Job 실행 (프로세스 격리)
 

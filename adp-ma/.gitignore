@@ -6,3 +6,4 @@ examples/*.csv
 examples/kaggle/
 examples/titanic/
 examples/kaggle_dl/
+.env

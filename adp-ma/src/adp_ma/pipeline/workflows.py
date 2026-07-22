@@ -37,8 +37,11 @@ def kaggle_phases(goal: str, with_modeling: bool = False) -> list[Phase]:
             name="data_cleaning",
             kind="transform",
             objective=(
-                "Clean the data based on the EDA findings: handle duplicates, missing values, "
-                f"formats and dtypes as needed for the goal: {goal}"
+                "Do ONLY data cleaning based on the EDA findings: impute missing values, "
+                "remove duplicates, fix dtypes/formats, drop unusable columns. "
+                "Do NOT encode categoricals and do NOT derive or create new feature columns "
+                "— those belong to a later feature-engineering phase. Keep original categorical "
+                f"columns intact for later encoding. Overall goal for context: {goal}"
             ),
             rationale="이후 분석·피처링이 신뢰할 수 있는 기반 확보",
         ),
@@ -55,8 +58,11 @@ def kaggle_phases(goal: str, with_modeling: bool = False) -> list[Phase]:
             name="feature_engineering",
             kind="transform",
             objective=(
-                "Create and transform features per the EDA recommendations "
-                f"to serve the goal: {goal}"
+                "The data is ALREADY cleaned (missing values handled, dtypes fixed). "
+                "Do feature engineering per the EDA recommendations: encode categoricals, "
+                "derive/combine columns, scale. Do NOT re-impute or re-clean, and check a "
+                "column still exists before using it (cleaning may have renamed/dropped some). "
+                f"Serve the goal: {goal}"
             ),
             rationale="모델링(M3)·분석에 유용한 표현 확보",
         ),

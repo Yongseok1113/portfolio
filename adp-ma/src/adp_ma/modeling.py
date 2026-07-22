@@ -50,8 +50,10 @@ def _feature_matrix(train: pd.DataFrame, test: pd.DataFrame, target: str, exclud
     if not cols:
         raise ValueError("모델링에 사용할 수치형 공통 피처가 없음 — FE 단계 산출 확인 필요")
     med = train[cols].median(numeric_only=True)
-    x_train = train[cols].fillna(med).astype("float64")
-    x_test = test[cols].fillna(med).astype("float64")
+    # med[col]이 NaN인 경우(해당 컬럼이 train에서 전부 결측) fillna(med)는 NaN을 남긴다.
+    # 결정적 모델링 단계는 sklearn에 NaN을 절대 넘기면 안 되므로 0으로 최종 방어한다.
+    x_train = train[cols].fillna(med).fillna(0.0).astype("float64")
+    x_test = test[cols].fillna(med).fillna(0.0).astype("float64")
     return x_train, x_test, cols
 
 

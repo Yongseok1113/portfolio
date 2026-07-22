@@ -46,6 +46,11 @@ Rules:
 - No file I/O, no network, no exec/eval, no global state.
 - Never mutate columns you were not asked to touch.
 - Handle nulls and unexpected values defensively.
+- pandas 3.0 (Copy-on-Write): NEVER use chained inplace like df['c'].fillna(v, inplace=True)
+  or df['c'].replace(..., inplace=True) — it is a silent no-op. Assign back instead:
+  df['c'] = df['c'].fillna(v)  (or df = df.fillna({'c': v})).
+- When one-hot encoding, add each dummy column only once; never pd.concat the same dummies
+  twice and never leave duplicate column names in the output.
 Data preservation (critical, applies to cleaning/parsing steps):
 - PRESERVE ROWS while cleaning. Drop rows ONLY when the objective explicitly requires it (e.g. deduplication).
 - When parsing, use coercion (pd.to_numeric(..., errors="coerce"), pd.to_datetime(..., errors="coerce")) and KEEP unparseable rows as NaN — never filter them out.

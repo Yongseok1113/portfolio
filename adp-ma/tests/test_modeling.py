@@ -48,6 +48,17 @@ def test_train_handles_nan_and_excludes_target_nulls():
     assert len(preds) == len(test)
 
 
+def test_all_nan_feature_column_does_not_reach_model():
+    # 어떤 피처가 train에서 전부 결측이면 median도 NaN → fillna(med)가 NaN을 남겨
+    # 예전엔 sklearn이 'Input X contains NaN'으로 죽었다. 0 방어로 완주해야 함.
+    train, test, _ = make_classification_frames()
+    train["dead"] = np.nan   # float 전체 결측 컬럼 → median도 NaN
+    test["dead"] = np.nan
+    report, preds = train_validate_predict(train, test, "y", exclude=["id"], cv=3)
+    assert "dead" in report.features        # 수치형 공통 피처로 포함되나
+    assert len(preds) == len(test)          # NaN 없이 완주 (0 방어)
+
+
 def test_no_numeric_features_raises():
     train = pd.DataFrame({"id": [1, 2], "name": ["a", "b"], "y": [0, 1]})
     test = pd.DataFrame({"id": [3], "name": ["c"]})

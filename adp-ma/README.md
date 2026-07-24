@@ -68,6 +68,40 @@ uv run adp-ma run -i examples/sales_raw.csv \
 uv run pytest          # LLM 없이 도는 결정적 테스트 (contracts/monitor/sampling/sandbox)
 ```
 
+## 역할별 모델 라우팅
+
+역할마다 요구 품질이 다르다. 계획·확장·코드생성은 실패가 곧 실행 실패지만, 요약·서술은
+후속 프롬프트의 컨텍스트일 뿐이다. 경량 모델을 지정하면 **저위험·고토큰 역할만** 그쪽으로 보낸다.
+
+```bash
+scripts/llm-profile.sh light openai/gpt-oss-20b   # 경량 모델 지정
+scripts/llm-profile.sh light off                  # 해제 (전 역할 주 모델)
+# 환경변수로도: LLM_MODEL_LIGHT (또는 GROQ_MODEL_LIGHT)
+```
+
+| 티어 | 역할 | 근거 |
+|---|---|---|
+| **주 모델** | 계획·자기비평, phase 확장, 코드생성, 코드수정, Reader | 실패가 곧 실행 실패. 7B 실험에서 확장·코드생성이 정확히 무너진 지점 |
+| **경량** | Summarizer, EDA 서술, 도구 선택(tool plan), 게이트 테스트 생성 | 산출이 서술이거나(요약·EDA) 제약된 선택(도구 카탈로그)이고, 부실해도 `validate_tool_plan`·`gate_disabled`가 받아냄 |
+
+- **미설정 시 기존 동작 그대로** — 모든 역할이 주 모델 하나를 쓴다 (하위 호환)
+- Groq는 20b·70b의 **TPD 쿼터가 분리**돼 있어, 경량 역할을 20b로 보내면 주 모델 쿼터가 보존된다
+- `result.json`에 `tokens_by_model`·`calls_by_model`이 기록돼 라우팅 효과를 측정할 수 있다
+
+**실측 (2026-07-24, Titanic 동일 목표·각 1회)** — 주 70b / 경량 20b:
+
+| | 전량 70b | 라우팅 | 변화 |
+|---|---|---|---|
+| **70b 토큰** | 56,571 | **13,520** | **−76%** |
+| 20b 토큰 | — | 39,491 | — |
+| 호출 | 28 (전부 70b) | 6 heavy / 15 light | — |
+| CV / 선택 모델 | 0.8283 gradient_boosting | 0.8283 gradient_boosting | **동일** |
+
+품질 지표가 동일한 채로 제약 쿼터(70b TPD 100k) 사용량이 1/4로 줄어 하루 실행 가능 횟수가
+약 4배가 된다. 호출 수 차이(28 vs 21)는 refine 횟수의 실행 간 변동이며, 각 1회 측정이다.
+- 제약: 현재 두 티어가 **같은 엔드포인트**를 공유한다(클라이언트 1개). Groq 주 모델 + 로컬 경량
+  같은 교차 엔드포인트 조합은 아직 미지원 — 클라이언트 분리가 필요한 후속 과제
+
 ## 로컬 LLM (Ollama)
 
 Groq 무료티어의 일일 토큰 한도(TPD)를 피하려면 OpenAI 호환 로컬 서버로 전환한다.
@@ -275,8 +309,8 @@ uv run python examples/benchmark.py --model llama-3.3-70b-versatile --runs 3
 로컬 LLM 지원, **실제 Kaggle 제출 (Titanic public 0.77990)**.
 
 - in-cluster controller 완주 벤치마크 (배선은 검증됨, 완주 수치 미기록)
-- 역할별 모델 라우팅 — 현재 전 역할이 단일 모델. 요약은 소형·codegen은 대형으로 분리하면
-  비용·쿼터 절감 (로컬 7B + Groq 70b 하이브리드 가능)
+- 교차 엔드포인트 라우팅 — 역할별 모델 라우팅은 구현됐으나 두 티어가 같은 엔드포인트를 공유.
+  Groq 주 모델 + 로컬 경량 조합을 쓰려면 클라이언트 분리 필요
 - phase 경계의 구조적 강제 — 현재는 프롬프트 지시라 약한 모델이 무시. 이미 처리된 컬럼을
   계약으로 넘겨 재작업을 위반으로 잡는 방식이 더 견고
 - 실행 큐 Valkey, 병렬 dispatch (autonomous/hybrid), 비용 추적

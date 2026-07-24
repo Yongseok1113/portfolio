@@ -21,11 +21,17 @@ class Settings(BaseSettings):
     groq_model: str = "openai/gpt-oss-20b"
     llm_temperature: float = 0.2
 
+    # 역할별 모델 라우팅 — 저위험·고토큰 역할(요약·EDA 서술·도구선택·게이트 테스트)에 쓸
+    # 경량 모델. 비워두면 모든 역할이 groq_model 하나를 쓴다(기존 동작).
+    # 계획·확장·코드생성·수정은 품질이 결과를 좌우하므로 항상 주 모델을 쓴다.
+    groq_model_light: str = ""
+
     # provider 중립 별칭 — 로컬 LLM 전환 시 GROQ_* 이름이 헷갈려 LLM_*을 제공.
     # 값이 있으면 대응하는 groq_* 를 덮어쓴다 (없으면 groq_* 유지).
     llm_base_url: str = ""
     llm_api_key: str = ""
     llm_model: str = ""
+    llm_model_light: str = ""
 
     @model_validator(mode="after")
     def _apply_llm_aliases(self):
@@ -35,6 +41,8 @@ class Settings(BaseSettings):
             self.groq_api_key = self.llm_api_key
         if self.llm_model:
             self.groq_model = self.llm_model
+        if self.llm_model_light:
+            self.groq_model_light = self.llm_model_light
         # 로컬 서버는 키가 없어도 되지만 OpenAI 클라이언트가 빈 문자열을 거부하므로 더미 채움
         if not self.groq_api_key and "api.groq.com" not in self.groq_base_url:
             self.groq_api_key = "local"

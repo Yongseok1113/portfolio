@@ -11,7 +11,7 @@ plan-level 백트래킹: phase 실패 누적 시 오류 증거와 함께 전체 
 from pathlib import Path
 
 import pandas as pd
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import re
 
@@ -65,6 +65,9 @@ class PipelineResult(BaseModel):
     plan_retries: int = 0
     llm_calls: int = 0
     total_tokens: int = 0
+    # 역할별 모델 라우팅 사용량 — 라우팅 효과·비용 추적
+    tokens_by_model: dict[str, int] = Field(default_factory=dict)
+    calls_by_model: dict[str, int] = Field(default_factory=dict)
     # M3 — 모델링 결과 (test 데이터 제공 시)
     submission_path: str | None = None
     best_model: str = ""
@@ -150,6 +153,10 @@ class PipelineRunner:
         self._guard = ""
         self._execute = self._make_executor(case.run_id)
         case.record("executor", {"mode": self.settings.executor})
+        case.record(
+            "llm_routing",
+            {"model": self.llm.model_for(), "model_light": self.llm.model_for(light=True)},
+        )
         df = _read_table(self._resolve_input(input_path, case))
 
         # ── M3: test 데이터 제공 시 train+test 결합 파이프라인 + 모델링 활성 ──
@@ -548,7 +555,8 @@ class PipelineRunner:
         )
         if insights:
             user += "\n\n## Prior findings\n" + "\n".join(insights)
-        text = self.llm.chat(_ANALYSIS_SYSTEM, user).strip()
+        # 경량 티어: 프로파일을 받아 서술 인사이트를 내는 역할 — 코드가 아니라 후속 프롬프트의 컨텍스트
+        text = self.llm.chat(_ANALYSIS_SYSTEM, user, light=True).strip()
         insights.append(f"### {phase.name}\n{text[:1500]}")
         case.save_text(f"analysis-{phase.name}.md", text)
         case.record("analysis", {"phase": phase.name, "chars": len(text)})
@@ -556,7 +564,10 @@ class PipelineRunner:
     def _result(self, ok: bool, message: str, case: CaseFolder, **kw) -> PipelineResult:
         res = PipelineResult(
             ok=ok, message=message, run_dir=str(case.dir),
-            llm_calls=self.llm.calls, total_tokens=self.llm.total_tokens, **kw,
+            llm_calls=self.llm.calls, total_tokens=self.llm.total_tokens,
+            tokens_by_model=dict(self.llm.tokens_by_model),
+            calls_by_model=dict(self.llm.calls_by_model),
+            **kw,
         )
         case.save_json("result.json", res.model_dump())
         # result.json까지 저장한 뒤 아카이빙해야 MinIO 사본이 완전하다

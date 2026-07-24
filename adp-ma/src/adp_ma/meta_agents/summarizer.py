@@ -23,7 +23,8 @@ class Summarizer:
     def summarize_phase(self, phase_name: str, events: list[dict]) -> str:
         log = json.dumps(events, ensure_ascii=False, default=str)[:6000]
         user = f"## Phase\n{phase_name}\n\n## Execution events\n{log}"
-        return self.llm.chat(_SUMMARIZER_SYSTEM, user).strip()
+        # 경량 티어: 입력이 크지만(최대 6000자) 산출은 서술 요약이라 품질 민감도가 낮다
+        return self.llm.chat(_SUMMARIZER_SYSTEM, user, light=True).strip()
 
 
 def assemble_final_report(

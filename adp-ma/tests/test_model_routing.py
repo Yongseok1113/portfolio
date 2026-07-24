@@ -1,0 +1,96 @@
+"""역할별 모델 라우팅 — 티어 선택·사용량 집계 (네트워크 없이 목으로 검증)."""
+
+import pandas as pd
+
+from adp_ma.config import Settings
+from adp_ma.llm import LLMClient
+
+
+class _FakeUsage:
+    def __init__(self, n):
+        self.total_tokens = n
+
+
+class _FakeResp:
+    def __init__(self, text, tokens):
+        self.choices = [type("C", (), {"message": type("M", (), {"content": text})()})()]
+        self.usage = _FakeUsage(tokens)
+
+
+def _client(monkeypatch, **over):
+    for k in ("LLM_MODEL", "LLM_MODEL_LIGHT", "GROQ_MODEL", "GROQ_MODEL_LIGHT"):
+        monkeypatch.delenv(k, raising=False)
+    s = Settings(_env_file=None, groq_api_key="x", **over)
+    c = LLMClient(s)
+    seen = []
+
+    def fake_create(*, model, messages, temperature):
+        seen.append(model)
+        return _FakeResp("ok", 10)
+
+    monkeypatch.setattr(c._client.chat.completions, "create", fake_create)
+    return c, seen
+
+
+def test_light_falls_back_to_main_when_unset(monkeypatch):
+    c, seen = _client(monkeypatch, groq_model="big")
+    c.chat("s", "u", light=True)
+    c.chat("s", "u")
+    assert seen == ["big", "big"]  # 경량 미설정 → 전부 주 모델 (기존 동작 보존)
+
+
+def test_light_routes_to_light_model(monkeypatch):
+    c, seen = _client(monkeypatch, groq_model="big", groq_model_light="small")
+    c.chat("s", "u", light=True)
+    c.chat("s", "u")
+    assert seen == ["small", "big"]
+
+
+def test_usage_tracked_per_model(monkeypatch):
+    c, _ = _client(monkeypatch, groq_model="big", groq_model_light="small")
+    c.chat("s", "u", light=True)
+    c.chat("s", "u")
+    c.chat("s", "u")
+    assert c.calls == 3 and c.total_tokens == 30
+    assert c.calls_by_model == {"small": 1, "big": 2}
+    assert c.tokens_by_model == {"small": 10, "big": 20}
+
+
+def test_chat_json_forwards_tier(monkeypatch):
+    c, seen = _client(monkeypatch, groq_model="big", groq_model_light="small")
+
+    def fake_create(*, model, messages, temperature):
+        seen.append(model)
+        return _FakeResp('{"a": 1}', 5)
+
+    monkeypatch.setattr(c._client.chat.completions, "create", fake_create)
+    assert c.chat_json("s", "u", light=True) == {"a": 1}
+    assert seen == ["small"]
+
+
+def test_llm_model_light_alias_overrides(monkeypatch):
+    monkeypatch.delenv("GROQ_MODEL_LIGHT", raising=False)
+    monkeypatch.setenv("GROQ_MODEL_LIGHT", "from-groq")
+    monkeypatch.setenv("LLM_MODEL_LIGHT", "from-llm")
+    s = Settings(_env_file=None, groq_api_key="x")
+    assert s.groq_model_light == "from-llm"  # LLM_* 우선
+
+
+def test_result_exposes_per_model_usage(monkeypatch, tmp_path):
+    """라우팅 효과를 측정할 수 있도록 result에 모델별 사용량이 실린다."""
+    from adp_ma.pipeline import PipelineRunner
+
+    data = tmp_path / "d.csv"
+    pd.DataFrame({"a": [1, 2]}).to_csv(data, index=False)
+    s = Settings(
+        _env_file=None, workflow="kaggle", groq_api_key="x",
+        groq_model="big", groq_model_light="small", runs_dir=str(tmp_path / "runs"),
+    )
+    runner = PipelineRunner(s)
+    runner.plan_reviewer = lambda phases: False  # LLM 호출 없이 즉시 중단
+    runner.llm.calls_by_model = {"big": 2, "small": 3}
+    runner.llm.tokens_by_model = {"big": 100, "small": 50}
+
+    res = runner.run(data, "goal")
+    assert res.calls_by_model == {"big": 2, "small": 3}
+    assert res.tokens_by_model == {"big": 100, "small": 50}

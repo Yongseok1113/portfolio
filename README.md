@@ -54,7 +54,8 @@ portfolio/
 ├── aquarium/                  ← [초기] 멀티 에이전트 시스템 (스캐폴드)
 │
 ├── docs/
-│   └── GIT_CONVENTION.md      ← 브랜치 전략
+│   ├── GIT_CONVENTION.md      ← 브랜치 전략
+│   └── mcp-infra-design.md    ← 공용 인프라 MCP 서버 설계 (GPU job 툴 등)
 └── README.md
 ```
 

@@ -195,7 +195,37 @@ VS(제출 유효성) + ANPS(accuracy) → **CS = 0.5·VS + 0.5·ANPS** 채점.
 실행 중 **실전 버그 발견·수정**: FE 단계가 중복 컬럼명을 만들면 계약 검증기의 `df[col]`이
 Series가 아닌 DataFrame이 되어 크래시 → 중복 컬럼을 critical 위반으로 잡아 refine이 고치도록 수정
 ([schema_contract.py](src/adp_ma/contracts/schema_contract.py)). 수정 후 클리닝 완주·FE 진입 확인.
-(전체 완주 벤치마크 수치는 Groq 무료티어 일일 토큰 한도 리셋 후 기록 예정)
+
+**실제 대회 완주·제출 (2026-07-24, llama-3.3-70b-versatile)** — `adp-ma kaggle -c titanic`으로
+Kaggle에서 원본을 받아(train 891 / test 418) 6-phase 완주 후 실제 제출:
+
+| 지표 | 값 |
+|---|---|
+| **Kaggle public score** | **0.77990** (성별 기준선 0.7655 초과) |
+| 선택 모델 / CV | gradient_boosting **0.8283** (LR 0.7935 · RF 0.8092 중 선택) |
+| phase 완주 | 6/6, **plan 재계획 0 · phase 백트래킹 0** |
+| 비용 | 28 LLM calls / 56.5k tokens |
+| 실행 경로 | tool plan 3건 · codegen 폴백 4건 · `gate_disabled` 2건 |
+| 피처 | 9개 (레이블 인코딩 + FamilySize 파생) |
+
+목표: "Age 결측 중앙값·Embarked 최빈값 보정, Sex·Embarked 레이블 인코딩, FamilySize 파생, Cabin 제거".
+
+### 관측: 자기수복 루프는 모델 체급에 임계가 있다
+
+동일 프레임워크·데이터·목표를 로컬 `qwen2.5-coder:7b`로 돌렸을 때는 **완주에 반복 실패**했다.
+실패 원인이 프레임워크 결함이 아니라는 점이 감사 추적에서 드러난다:
+
+- **refine(코드 레벨)은 정상 작동** — `mode()[0]`의 `ValueError`를 보고 가드를 점진 추가
+  (`04` 무가드 → `18` `isnull().any()` → `22` `pd.notna()`). 다만 매번 실패 표현식 *주변*만 감싸고
+  `mode()[0]` 자체는 못 고쳐 같은 줄에서 계속 죽었다
+- **phase 백트래킹도 증거를 전달** — `hints = "Previous attempt failed with: … Use a different approach."`
+  ([runner.py](src/adp_ma/pipeline/runner.py))가 재확장 프롬프트에 들어간다. 그런데 7B는 3회 백트래킹
+  내내 **동일한 분해**(`['impute_age', 'impute_embarked', …]`)를 반복 생성해 지시를 활용하지 못했다
+- 70b는 같은 조건에서 **백트래킹 0회로 한 번에 완주**
+
+즉 복구 메커니즘의 가치는 **모델이 피드백을 해석·반영할 수 있을 때만** 실현되고, 임계 체급 아래에서는
+루프가 헛돈다. 게이트 A/B 실험(약한 모델에선 안전장치가 무해화될 뿐)과 같은 결의 관측이다.
+로컬 LLM은 쿼터 없는 개발 반복에는 유효하나, 완주 벤치마크에는 70b급이 필요하다.
 
 ## Kaggle 연동
 
@@ -211,7 +241,8 @@ adp-ma kaggle -c titanic -g "..." --submit   # 계정·대회 확인 프롬프�
 
 - `--submit`는 **외부 공개 동작** — 계정·대회를 화면에 표시하고 확인받은 뒤에만 제출 (기본은 파일만 생성)
 - 제출양식 파일명 변종 자동 탐지 (Titanic은 `gender_submission.csv`)
-- 실검증: 실제 Titanic 대회 다운로드(34.1k, 계정 인증 확인). 전체 완주·실제 제출은 쿼터 리셋 후
+- **실검증 완료** (2026-07-24): Titanic 다운로드 → 6-phase 완주 → submission 418행 생성 →
+  실제 제출 → **public score 0.77990** 회수. 상세는 [실제 데이터셋(Titanic)](#실제-데이터셋-titanic) 참고
 
 ## 품질 벤치마크
 
@@ -240,8 +271,13 @@ uv run python examples/benchmark.py --model llama-3.3-70b-versatile --runs 3
 
 ## 로드맵
 
-완료: M1~M4, 게이트 A/B, case folder MinIO 아카이빙, in-cluster controller, Kaggle 연동.
+완료: M1~M4, 게이트 A/B, case folder MinIO 아카이빙, in-cluster controller, Kaggle 연동,
+로컬 LLM 지원, **실제 Kaggle 제출 (Titanic public 0.77990)**.
 
-- 쿼터 리셋 후 전체 완주 벤치마크 기록 (Titanic VS/CS, controller 완주, 실제 Kaggle 제출 점수)
+- in-cluster controller 완주 벤치마크 (배선은 검증됨, 완주 수치 미기록)
+- 역할별 모델 라우팅 — 현재 전 역할이 단일 모델. 요약은 소형·codegen은 대형으로 분리하면
+  비용·쿼터 절감 (로컬 7B + Groq 70b 하이브리드 가능)
+- phase 경계의 구조적 강제 — 현재는 프롬프트 지시라 약한 모델이 무시. 이미 처리된 컬럼을
+  계약으로 넘겨 재작업을 위반으로 잡는 방식이 더 견고
 - 실행 큐 Valkey, 병렬 dispatch (autonomous/hybrid), 비용 추적
 - 에이전트 라이브러리 영속화(현재 인메모리)

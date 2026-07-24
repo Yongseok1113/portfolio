@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # 경량 모델. 비워두면 모든 역할이 groq_model 하나를 쓴다(기존 동작).
     # 계획·확장·코드생성·수정은 품질이 결과를 좌우하므로 항상 주 모델을 쓴다.
     groq_model_light: str = ""
+    # 교차 엔드포인트 라우팅 — 경량 티어를 다른 엔드포인트(예: 로컬 Ollama)로 보낸다.
+    # 비워두면 경량 티어도 주 엔드포인트를 쓰고 모델만 달라진다.
+    groq_base_url_light: str = ""
+    groq_api_key_light: str = ""
 
     # provider 중립 별칭 — 로컬 LLM 전환 시 GROQ_* 이름이 헷갈려 LLM_*을 제공.
     # 값이 있으면 대응하는 groq_* 를 덮어쓴다 (없으면 groq_* 유지).
@@ -32,6 +36,8 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_model: str = ""
     llm_model_light: str = ""
+    llm_base_url_light: str = ""
+    llm_api_key_light: str = ""
 
     @model_validator(mode="after")
     def _apply_llm_aliases(self):
@@ -43,9 +49,24 @@ class Settings(BaseSettings):
             self.groq_model = self.llm_model
         if self.llm_model_light:
             self.groq_model_light = self.llm_model_light
+        if self.llm_base_url_light:
+            self.groq_base_url_light = self.llm_base_url_light
+        if self.llm_api_key_light:
+            self.groq_api_key_light = self.llm_api_key_light
         # 로컬 서버는 키가 없어도 되지만 OpenAI 클라이언트가 빈 문자열을 거부하므로 더미 채움
         if not self.groq_api_key and "api.groq.com" not in self.groq_base_url:
             self.groq_api_key = "local"
+        # 경량 엔드포인트만 주고 경량 모델을 안 주면 라우팅이 성립하지 않는다 — 설정 오류로 알림
+        if self.groq_base_url_light and not self.groq_model_light:
+            raise ValueError(
+                "경량 엔드포인트(*_BASE_URL_LIGHT)를 지정하면 경량 모델(*_MODEL_LIGHT)도 필요합니다"
+            )
+        if (
+            self.groq_base_url_light
+            and not self.groq_api_key_light
+            and "api.groq.com" not in self.groq_base_url_light
+        ):
+            self.groq_api_key_light = "local"
         return self
 
     # 백트래킹·수정 한도 (논문 기본값: refine 3/레벨, phase 2, plan 3)

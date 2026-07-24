@@ -48,7 +48,8 @@ LLM 백엔드는 OpenAI 호환 엔드포인트면 무엇이든 된다 — 기본
 | 샌드박스 | 네임스페이스 격리 + **K8s Job 프로세스 격리** (`EXECUTOR=k8s`) | `src/adp_ma/ground/sandbox.py`, `k8s_executor.py` |
 | HITL 체크포인트 | ✅ (`--interactive`) | `src/adp_ma/pipeline/runner.py` |
 | 병렬 dispatch (autonomous/hybrid) | ⬜ centralized만 | 로드맵 |
-| 다중 소스 join, 비용 추적 | ⬜ | 로드맵 |
+| 비용 추적 | 🟡 모델별 토큰·호출 집계 | `src/adp_ma/llm/client.py` |
+| 다중 소스 join | ⬜ | 로드맵 |
 
 > AutoKaggle 업그레이드(M1~M4)와 Kaggle 연동은 아래 별도 섹션 참고.
 
@@ -334,11 +335,27 @@ uv run python examples/benchmark.py --model llama-3.3-70b-versatile --runs 3
 
 ## 로드맵
 
-완료: M1~M4, 게이트 A/B, case folder MinIO 아카이빙, in-cluster controller, Kaggle 연동,
-로컬 LLM 지원, **실제 Kaggle 제출 (Titanic public 0.77990)**.
+**프로토타입 완료** — 논문(ADP-MA) 모사에서 시작해 AutoKaggle 구조로 확장, 실제 대회 제출까지 검증.
 
-- in-cluster controller 완주 벤치마크 (배선은 검증됨, 완주 수치 미기록)
-- phase 경계의 구조적 강제 — 현재는 프롬프트 지시라 약한 모델이 무시. 이미 처리된 컬럼을
-  계약으로 넘겨 재작업을 위반으로 잡는 방식이 더 견고
-- 실행 큐 Valkey, 병렬 dispatch (autonomous/hybrid), 비용 추적
-- 에이전트 라이브러리 영속화(현재 인메모리)
+- 메타-에이전트 3종, progressive sampling, 스키마 계약, 2단계 백트래킹, 규칙 Monitor, case folder
+- AutoKaggle M1~M4: tools library, 6-phase, Reader·Summarizer, 모델링·submission, 게이트·HITL
+- K8s: ground agent Job 격리, MinIO 아카이빙(`--archive`)·`minio://` 입력, in-cluster controller
+- Kaggle 연동 + **실제 제출 (Titanic public 0.77990)**
+- 로컬 LLM(Ollama) + 역할별 모델 라우팅 + 교차 엔드포인트 (주 모델 쿼터 −76%)
+- 실행 중 얻은 관측: 자기수복 루프·품질 게이트는 모델 체급에 임계가 있다 (감사 추적으로 근거화)
+
+### 프로토타입의 경계 (검증 미완)
+
+프로토타입으로선 충분하나, 주장으로 굳히려면 남은 것 — 결함이 아니라 범위의 문제.
+
+- **측정이 1회** — Titanic·게이트 A/B 모두 n=1. 반복(n≥3)해야 노이즈와 신호가 갈린다
+- **단일 대회** — Titanic(분류)만. 회귀 과제·다른 스키마에서의 일반성 미검증
+- **in-cluster controller 완주 수치** — 배선은 실검증됐으나 완주 벤치마크는 공란
+
+### 향후 (견고화 → 확장)
+
+- **phase 경계의 구조적 강제** — 현재는 프롬프트 지시라 약한 모델이 무시. 이미 처리된 컬럼을
+  계약으로 넘겨 재작업을 위반으로 잡는 방식이 더 견고 (7B 실패의 근본 원인)
+- 실행 큐 Valkey, 병렬 dispatch (autonomous/hybrid), 비용 추적(모델별 토큰은 이미 집계됨)
+- 에이전트 라이브러리 영속화 (현재 인메모리)
+- GPU 학습 job은 계정 단위 희소 자원이라 **공유 인프라 수준**에서 관리 (Kaggle Notebooks API 검토)

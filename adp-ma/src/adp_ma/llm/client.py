@@ -1,4 +1,8 @@
-"""Groq(OpenAI 호환) chat 래퍼 — 모든 메타-에이전트가 하나의 클라이언트를 공유한다."""
+"""OpenAI 호환 chat 래퍼 — 역할 티어(주/경량)에 따라 모델·엔드포인트를 라우팅한다.
+
+기본은 단일 클라이언트를 공유하고, 경량 엔드포인트가 지정되면 그 티어만 별도
+클라이언트로 보낸다 (예: 주=Groq 70b, 경량=로컬 Ollama). model_for/endpoint_for 참고.
+"""
 
 import json
 import re

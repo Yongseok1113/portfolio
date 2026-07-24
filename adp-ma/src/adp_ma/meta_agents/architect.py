@@ -135,7 +135,9 @@ class Architect:
         if spec.hints:
             user += f"\n## Hints from previous failure\n{spec.hints}"
         try:
-            data = self.llm.chat_json(_TOOLPLAN_SYSTEM + describe_tools(), user)
+            # 경량 티어: 카탈로그에서 고르는 제약된 선택 문제 — 자유 코드 생성보다 쉽다
+            # (계획이 부실하면 validate_tool_plan이 걸러 codegen으로 폴백)
+            data = self.llm.chat_json(_TOOLPLAN_SYSTEM + describe_tools(), user, light=True)
         except ValueError:
             return []
         plan = data.get("tool_plan", []) if isinstance(data, dict) else data
@@ -165,7 +167,9 @@ class Architect:
             f"## Schema contract\n{spec.contract.model_dump_json()}\n"
             f"## Data profile (input side)\n{profile_text}"
         )
-        return extract_code(self.llm.chat(_UNITTEST_SYSTEM, user))
+        # 경량 티어: 게이트 테스트는 결함이 잦아도 gate_disabled 안전장치가 받아낸다
+        # (A/B 실험에서 20b 생성 테스트 2건 모두 무력화된 전례)
+        return extract_code(self.llm.chat(_UNITTEST_SYSTEM, user, light=True))
 
     def refine_code(self, spec: GroundAgentSpec, error: str) -> str:
         user = (

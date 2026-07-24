@@ -65,7 +65,7 @@ portfolio/
 | 영역 | 상태 | 요약 |
 |---|---|---|
 | **공유 인프라** (`.k8s/`) | ✅ 운영 | Valkey·PostgreSQL·MinIO 프로비저닝 완료, Groq LLM 전환, 운영 스크립트 일습 |
-| **adp-ma** | ✅ 성숙 | 논문 모사 파이프라인 + AutoKaggle 업그레이드(M1~M4) + Kaggle 연동 + in-cluster controller |
+| **adp-ma** | ✅ 성숙 | 논문 모사 파이프라인 + AutoKaggle(M1~M4) + **실제 Kaggle 제출 (Titanic public 0.77990)** + in-cluster controller |
 | **aquarium** | 🟡 스캐폴드 | uv 프로젝트 뼈대만 존재, 구현 예정 |
 
 ### 공유 인프라 (`.k8s/`)
@@ -96,7 +96,10 @@ cd .k8s/scripts
 - **채점형 벤치마크**: 결정적 정답 대비 측정 → 70b 합계오차 0.0% pass / 8b는 계약 위반을 프레임워크가 정확히 거부
 - **[AutoKaggle 업그레이드](adp-ma/docs/autokaggle-design.md) 완성** (M1~M4): ML tools library(도구 우선·codegen 폴백),
   고정 6-phase 워크플로, Reader·Summarizer, 모델링·submission(VS/CS), 단위 테스트 게이트·HITL
-- **Kaggle 연동**: `adp-ma kaggle -c <slug> -g <goal>` — 대회 데이터 다운로드 → 파이프라인 → submission → (확인 후) 제출
+- **Kaggle 연동 + 실제 제출 검증**: `adp-ma kaggle -c titanic --submit` 한 줄로 다운로드 → 6-phase 완주 →
+  제출 → **public score 0.77990** 회수 (CV 0.8283, 백트래킹 0회, 28 calls / 56.5k tokens)
+- **로컬 LLM 지원**: `LLM_BASE_URL`로 Ollama 등 OpenAI 호환 엔드포인트 전환 — 쿼터 없는 개발 반복.
+  단, 자기수복 루프는 모델 체급에 임계가 있어 완주 벤치마크엔 70b급 필요 (근거는 프로젝트 README)
 - **in-cluster controller**: 파이프라인 전체를 `adp-ma-system`의 Job으로 실행 (controller SA가 워커 Job 오케스트레이션)
 
 ### aquarium

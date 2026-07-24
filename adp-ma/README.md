@@ -74,9 +74,10 @@ uv run pytest          # LLM 없이 도는 결정적 테스트 (contracts/monito
 후속 프롬프트의 컨텍스트일 뿐이다. 경량 모델을 지정하면 **저위험·고토큰 역할만** 그쪽으로 보낸다.
 
 ```bash
-scripts/llm-profile.sh light openai/gpt-oss-20b   # 경량 모델 지정
+scripts/llm-profile.sh light openai/gpt-oss-20b   # 같은 엔드포인트, 경량 모델만 분리
+scripts/llm-profile.sh hybrid                     # 주=Groq · 경량=로컬 Ollama (교차 엔드포인트)
 scripts/llm-profile.sh light off                  # 해제 (전 역할 주 모델)
-# 환경변수로도: LLM_MODEL_LIGHT (또는 GROQ_MODEL_LIGHT)
+# 환경변수: LLM_MODEL_LIGHT · LLM_BASE_URL_LIGHT · LLM_API_KEY_LIGHT (GROQ_* 접두사도 인식)
 ```
 
 | 티어 | 역할 | 근거 |
@@ -99,8 +100,36 @@ scripts/llm-profile.sh light off                  # 해제 (전 역할 주 모�
 
 품질 지표가 동일한 채로 제약 쿼터(70b TPD 100k) 사용량이 1/4로 줄어 하루 실행 가능 횟수가
 약 4배가 된다. 호출 수 차이(28 vs 21)는 refine 횟수의 실행 간 변동이며, 각 1회 측정이다.
-- 제약: 현재 두 티어가 **같은 엔드포인트**를 공유한다(클라이언트 1개). Groq 주 모델 + 로컬 경량
-  같은 교차 엔드포인트 조합은 아직 미지원 — 클라이언트 분리가 필요한 후속 과제
+
+### 교차 엔드포인트 (하이브리드)
+
+경량 티어를 **다른 서버**로 보낼 수 있다. `LLM_BASE_URL_LIGHT`를 주면 그 티어 전용
+클라이언트가 따로 생성되고, 없으면 주 클라이언트를 재사용한다(모델만 분리).
+
+```bash
+scripts/llm-profile.sh hybrid                  # 경량 = 로컬 Ollama qwen2.5-coder:7b
+scripts/llm-profile.sh hybrid llama3.1:8b      # 경량 모델 지정
+```
+
+주 모델은 Groq 70b(품질이 필요한 역할), 경량은 로컬 GPU(무료·무제한) — **경량 역할이
+API 쿼터를 전혀 소비하지 않는다.** 위 표에서 20b가 먹던 39k 토큰이 로컬로 빠지는 셈이다.
+
+- 경량 엔드포인트만 주고 모델을 안 주면 라우팅이 성립하지 않으므로 **설정 오류로 막는다**
+- 로컬 엔드포인트에 키가 없으면 더미(`local`)를 채운다 (OpenAI 클라이언트가 빈 키를 거부)
+- 감사 추적(`llm_routing`)에 티어별 모델·엔드포인트가 함께 기록된다
+- 트레이드오프: 경량 역할이 로컬 7B 속도에 묶여 벽시계 시간은 늘어난다 (쿼터↔시간 교환)
+
+**실증 (2026-07-24)** — 주 Groq 70b / 경량 로컬 Ollama 7B로 실행한 감사 추적:
+
+```
+model: llama-3.3-70b-versatile   endpoint: https://api.groq.com/openai/v1
+model_light: qwen2.5-coder:7b    endpoint_light: http://localhost:11434/v1
+calls:  70b 19 / 로컬 7B 22      tokens: 70b 31,702 / 로컬 7B 57,476
+```
+
+두 서버로 동시에 나가는 것이 확인됐고, **경량 역할이 쓴 57k 토큰은 API 쿼터를 전혀 쓰지 않는다.**
+(이 실행 자체는 같은 날 앞선 실행들로 70b TPD가 소진돼 완주하지 못했다 — 라우팅이 해결하려는
+바로 그 제약이며, 하이브리드를 하루 시작 시점에 켜두면 회피된다.)
 
 ## 로컬 LLM (Ollama)
 
@@ -309,8 +338,6 @@ uv run python examples/benchmark.py --model llama-3.3-70b-versatile --runs 3
 로컬 LLM 지원, **실제 Kaggle 제출 (Titanic public 0.77990)**.
 
 - in-cluster controller 완주 벤치마크 (배선은 검증됨, 완주 수치 미기록)
-- 교차 엔드포인트 라우팅 — 역할별 모델 라우팅은 구현됐으나 두 티어가 같은 엔드포인트를 공유.
-  Groq 주 모델 + 로컬 경량 조합을 쓰려면 클라이언트 분리 필요
 - phase 경계의 구조적 강제 — 현재는 프롬프트 지시라 약한 모델이 무시. 이미 처리된 컬럼을
   계약으로 넘겨 재작업을 위반으로 잡는 방식이 더 견고
 - 실행 큐 Valkey, 병렬 dispatch (autonomous/hybrid), 비용 추적

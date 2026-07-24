@@ -76,6 +76,54 @@ def test_llm_model_light_alias_overrides(monkeypatch):
     assert s.groq_model_light == "from-llm"  # LLM_* 우선
 
 
+# ── 교차 엔드포인트 (경량 티어를 다른 서버로) ────────────────────────────────
+def test_light_endpoint_uses_separate_client(monkeypatch):
+    for k in ("LLM_MODEL", "LLM_MODEL_LIGHT", "LLM_BASE_URL_LIGHT"):
+        monkeypatch.delenv(k, raising=False)
+    s = Settings(
+        _env_file=None, groq_api_key="x",
+        groq_model="big", groq_model_light="small",
+        groq_base_url_light="http://localhost:11434/v1",
+    )
+    c = LLMClient(s)
+    assert c._client_light is not c._client            # 별도 클라이언트
+    assert c._client_for(light=True) is c._client_light
+    assert c._client_for(light=False) is c._client
+    assert c.endpoint_for(light=True) == "http://localhost:11434/v1"
+    assert c.endpoint_for() == s.groq_base_url
+
+
+def test_same_endpoint_reuses_client(monkeypatch):
+    monkeypatch.delenv("LLM_BASE_URL_LIGHT", raising=False)
+    s = Settings(_env_file=None, groq_api_key="x", groq_model="big", groq_model_light="small")
+    c = LLMClient(s)
+    assert c._client_light is c._client                # 경량 엔드포인트 미지정 → 재사용
+    assert c.endpoint_for(light=True) == c.endpoint_for()
+
+
+def test_light_endpoint_ignored_without_light_model(monkeypatch):
+    """모델 없이 엔드포인트만 주면 라우팅이 성립하지 않으므로 설정 오류로 막는다."""
+    import pytest
+
+    for k in ("LLM_MODEL_LIGHT", "GROQ_MODEL_LIGHT"):
+        monkeypatch.delenv(k, raising=False)
+    with pytest.raises(ValueError, match="경량 모델"):
+        Settings(
+            _env_file=None, groq_api_key="x",
+            groq_base_url_light="http://localhost:11434/v1",
+        )
+
+
+def test_light_endpoint_gets_dummy_key(monkeypatch):
+    for k in ("LLM_API_KEY_LIGHT", "GROQ_API_KEY_LIGHT"):
+        monkeypatch.delenv(k, raising=False)
+    s = Settings(
+        _env_file=None, groq_api_key="x", groq_model_light="small",
+        groq_base_url_light="http://localhost:11434/v1",
+    )
+    assert s.groq_api_key_light == "local"  # 로컬 엔드포인트 + 키 없음 → 더미
+
+
 def test_result_exposes_per_model_usage(monkeypatch, tmp_path):
     """라우팅 효과를 측정할 수 있도록 result에 모델별 사용량이 실린다."""
     from adp_ma.pipeline import PipelineRunner

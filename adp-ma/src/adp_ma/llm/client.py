@@ -1,4 +1,8 @@
-"""Groq(OpenAI 호환) chat 래퍼 — 모든 메타-에이전트가 하나의 클라이언트를 공유한다."""
+"""OpenAI 호환 chat 래퍼 — 역할 티어(주/경량)에 따라 모델·엔드포인트를 라우팅한다.
+
+기본은 단일 클라이언트를 공유하고, 경량 엔드포인트가 지정되면 그 티어만 별도
+클라이언트로 보낸다 (예: 주=Groq 70b, 경량=로컬 Ollama). model_for/endpoint_for 참고.
+"""
 
 import json
 import re
@@ -17,6 +21,17 @@ class LLMClient:
             # Groq 무료 티어 TPM 한도(429)는 Retry-After 대기 후 재시도로 흡수
             max_retries=8,
         )
+        # 교차 엔드포인트: 경량 base_url이 따로 지정될 때만 별도 클라이언트를 만든다.
+        # 미지정이면 주 클라이언트를 그대로 재사용해 모델만 달라진다.
+        self._client_light = (
+            OpenAI(
+                base_url=settings.groq_base_url_light,
+                api_key=settings.groq_api_key_light,
+                max_retries=8,
+            )
+            if settings.groq_base_url_light
+            else self._client
+        )
         self.calls = 0
         self.total_tokens = 0
         # 모델별 사용량 — 라우팅 효과 측정·비용 추적용
@@ -29,12 +44,24 @@ class LLMClient:
             return self.settings.groq_model_light
         return self.settings.groq_model
 
+    def endpoint_for(self, light: bool = False) -> str:
+        """역할 티어 → 실제 엔드포인트. 경량 엔드포인트 미설정 시 주 엔드포인트."""
+        if light and self.settings.groq_base_url_light:
+            return self.settings.groq_base_url_light
+        return self.settings.groq_base_url
+
+    def _client_for(self, light: bool):
+        # 경량 모델이 설정된 경우에만 경량 클라이언트를 쓴다 (모델 없이 엔드포인트만 바뀌면 안 됨)
+        if light and self.settings.groq_model_light:
+            return self._client_light
+        return self._client
+
     def chat(
         self, system: str, user: str, temperature: float | None = None, light: bool = False
     ) -> str:
         """light=True는 저위험·고토큰 역할(요약·서술·도구선택·게이트) — 경량 모델로 라우팅."""
         model = self.model_for(light)
-        resp = self._client.chat.completions.create(
+        resp = self._client_for(light).chat.completions.create(
             model=model,
             temperature=(
                 self.settings.llm_temperature if temperature is None else temperature

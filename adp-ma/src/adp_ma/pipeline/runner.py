@@ -155,7 +155,12 @@ class PipelineRunner:
         case.record("executor", {"mode": self.settings.executor})
         case.record(
             "llm_routing",
-            {"model": self.llm.model_for(), "model_light": self.llm.model_for(light=True)},
+            {
+                "model": self.llm.model_for(),
+                "model_light": self.llm.model_for(light=True),
+                "endpoint": self.llm.endpoint_for(),
+                "endpoint_light": self.llm.endpoint_for(light=True),
+            },
         )
         df = _read_table(self._resolve_input(input_path, case))
 

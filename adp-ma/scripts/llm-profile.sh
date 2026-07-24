@@ -4,6 +4,7 @@
 #   scripts/llm-profile.sh local [모델] [경량모델]  # 기본 모델: qwen2.5-coder:7b
 #   scripts/llm-profile.sh groq                     # LLM_* 별칭을 비워 Groq(기본값)로 복귀
 #   scripts/llm-profile.sh light <모델>|off         # 역할별 라우팅의 경량 모델만 지정/해제
+#   scripts/llm-profile.sh hybrid [경량모델]        # 주=Groq, 경량=로컬 Ollama (교차 엔드포인트)
 #   scripts/llm-profile.sh status                   # 현재 설정 출력
 #
 # 역할별 라우팅: 경량 모델을 지정하면 저위험·고토큰 역할(요약·EDA 서술·도구선택·
@@ -23,11 +24,12 @@ ENV=".env"
 
 # LLM_* 로 시작하는 기존 줄을 제거한 사본을 만든다 (멱등)
 strip_all() {
-  grep -vE '^(LLM_BASE_URL|LLM_MODEL|LLM_MODEL_LIGHT|LLM_API_KEY)=' "$ENV" > "$ENV.tmp" || true
+  grep -vE '^(LLM_BASE_URL|LLM_MODEL|LLM_MODEL_LIGHT|LLM_API_KEY|LLM_BASE_URL_LIGHT|LLM_API_KEY_LIGHT)=' \
+    "$ENV" > "$ENV.tmp" || true
   mv "$ENV.tmp" "$ENV"
 }
 strip_light() {
-  grep -vE '^LLM_MODEL_LIGHT=' "$ENV" > "$ENV.tmp" || true
+  grep -vE '^(LLM_MODEL_LIGHT|LLM_BASE_URL_LIGHT|LLM_API_KEY_LIGHT)=' "$ENV" > "$ENV.tmp" || true
   mv "$ENV.tmp" "$ENV"
 }
 
@@ -54,11 +56,23 @@ case "${1:-status}" in
       echo "→ 경량 모델: $2 (요약·EDA 서술·도구선택·게이트 테스트 담당)"
     fi
     ;;
+  hybrid)
+    # 주 모델은 Groq(GROQ_*) 유지, 경량만 로컬 Ollama로 — 경량 역할이 쿼터를 전혀 안 먹는다
+    lightmodel="${2:-qwen2.5-coder:7b}"
+    lightbase="${OLLAMA_HOST:-http://localhost:11434}/v1"
+    strip_all
+    {
+      echo "LLM_MODEL_LIGHT=$lightmodel"
+      echo "LLM_BASE_URL_LIGHT=$lightbase"
+      echo "LLM_API_KEY_LIGHT=local"
+    } >> "$ENV"
+    echo "→ 하이브리드: 주=Groq(GROQ_MODEL) · 경량=$lightmodel @ $lightbase"
+    ;;
   status)
     echo "현재 .env LLM 설정:"
-    grep -E '^(LLM_|GROQ_)(BASE_URL|MODEL|MODEL_LIGHT|API_KEY)=' "$ENV" | sed -E 's/(API_KEY=).*/\1***/' \
+    grep -E '^(LLM_|GROQ_)[A-Z_]*(BASE_URL|MODEL|API_KEY)(_LIGHT)?=' "$ENV" | sed -E 's/(API_KEY[A-Z_]*=).*/\1***/' \
       || echo "  (LLM_* 없음 → Groq 기본값)"
     ;;
   *)
-    echo "usage: $0 {local [model] [light]|groq|light <model>|off|status}"; exit 2 ;;
+    echo "usage: $0 {local [model] [light]|groq|light <model>|off|hybrid [light]|status}"; exit 2 ;;
 esac
